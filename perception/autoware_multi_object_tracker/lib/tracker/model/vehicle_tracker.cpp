@@ -464,29 +464,38 @@ bool VehicleTracker::conditionedUpdate(
   std::array<double, 36> pose_cov = measurement.pose_covariance;
 
   bool is_updated = false;
+  double comp_diff_x = 0.0;
+  double comp_diff_y = 0.0;
   if (strategy.type == UpdateStrategyType::FRONT_WHEEL_UPDATE) {
     shape_update_anchor_ = BicycleMotionModel::LengthUpdateAnchor::FRONT;
 
     is_updated = motion_model_.updateStatePoseFront(
       strategy.anchor_point.x, strategy.anchor_point.y, pose_cov);
+
+    // comp_diff_x = strategy.anchor_point.x - object_.pose.position.x;
   } else {
     // Must be REAR_WHEEL_UPDATE (only remaining option after WEAK_UPDATE check)
     shape_update_anchor_ = BicycleMotionModel::LengthUpdateAnchor::REAR;
 
     is_updated =
       motion_model_.updateStatePoseRear(strategy.anchor_point.x, strategy.anchor_point.y, pose_cov);
+
+    // comp_diff_x = strategy.anchor_point.x - object_.pose.position.x;
   }
 
-  //  // compensate detected object position and footprint
-  //  object.pose.position.x -= comp_diff_x * cos_yaw - comp_diff_y * sin_yaw;
-  //  object.pose.position.y -= comp_diff_x * sin_yaw + comp_diff_y * cos_yaw;
-  //  for (auto & p : object.shape.footprint.points) {
-  //    p.x += comp_diff_x;
-  //    p.y += comp_diff_y;
-  //  }
-
-
+  // update object shape footprint
   object_.shape.footprint = measurement.shape.footprint;
+
+  const double tracker_yaw = motion_model_.getYawState();
+  const double cos_yaw = std::cos(tracker_yaw);
+  const double sin_yaw = std::sin(tracker_yaw);
+  // compensate detected object position and footprint
+  object_.pose.position.x -= comp_diff_x * cos_yaw - comp_diff_y * sin_yaw;
+  object_.pose.position.y -= comp_diff_x * sin_yaw + comp_diff_y * cos_yaw;
+  for (auto & p : object_.shape.footprint.points) {
+    p.x += comp_diff_x;
+    p.y += comp_diff_y;
+  }
 
   removeCache();
 
