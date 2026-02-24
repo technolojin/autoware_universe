@@ -145,101 +145,6 @@ bool VehicleTracker::measureWithPose(
 
   bool is_velocity_available = object.kinematics.has_twist;
 
-  // // check if the object is partially detected, and compensate the position
-  // bool is_long_partial_detect = false;
-  // bool is_lat_partial_detect = false;
-  // bool is_close_to_front = true;
-  // {
-  //   // project measured box to the tracker coordinate, yaw is already aligned
-  //   types::DynamicObject tracker_object;
-  //   getTrackedObject(getLatestMeasurementTime(), tracker_object, false);
-  //   const double tracker_yaw = motion_model_.getYawState();
-  //   const double cos_yaw = std::cos(tracker_yaw);
-  //   const double sin_yaw = std::sin(tracker_yaw);
-  //   const double dx = object.pose.position.x - tracker_object.pose.position.x;
-  //   const double dy = object.pose.position.y - tracker_object.pose.position.y;
-  //   const double local_x = dx * cos_yaw + dy * sin_yaw;
-  //   const double local_y = -dx * sin_yaw + dy * cos_yaw;
-
-  //   // pseudo intersection bounding box
-  //   double intersect_left =
-  //     std::min(tracker_object.shape.dimensions.y * 0.5, local_y - object.shape.dimensions.y * 0.5);
-  //   double intersect_right =
-  //     std::max(-tracker_object.shape.dimensions.y * 0.5, local_y - object.shape.dimensions.y * 0.5);
-  //   double intersect_front = std::min(
-  //     tracker_object.pose.position.x + tracker_object.shape.dimensions.x * 0.5,
-  //     local_x + object.shape.dimensions.x * 0.5);
-  //   double intersect_rear =
-  //     std::max(-tracker_object.shape.dimensions.x * 0.5, local_x - object.shape.dimensions.x * 0.5);
-  //   double intersect_length = std::max(0.0, intersect_front - intersect_rear);
-  //   double intersect_width = std::max(0.0, intersect_left - intersect_right);
-  //   double intersect_area = intersect_length * intersect_width;
-
-  //   // precision to determine partial detection
-  //   double source_area = tracker_object.shape.dimensions.x * tracker_object.shape.dimensions.y;
-  //   double recall = source_area < 1e-6 ? 0.0 : intersect_area / source_area;
-
-  //   // compensate detected object center position, if the object is partially detected
-  //   // determine compensation direction and amount
-  //   constexpr double min_recall_for_full_detection = 0.7;
-  //   constexpr double min_length_ratio_for_partial_detection = 0.7;
-  //   if (recall < min_recall_for_full_detection) {
-  //     double comp_diff_x = 0.0;
-  //     double comp_diff_y = 0.0;
-
-  //     // if length is small, snap front or rear
-  //     if (
-  //       tracker_object.shape.dimensions.x * min_length_ratio_for_partial_detection >
-  //       object.shape.dimensions.x) {
-  //       is_long_partial_detect = true;
-
-  //       // determine which part is close to the tracker bounding box
-  //       double front_diff =
-  //         local_x + (object.shape.dimensions.x - tracker_object.shape.dimensions.x) * 0.5;
-  //       double rear_diff =
-  //         local_x - (object.shape.dimensions.x - tracker_object.shape.dimensions.x) * 0.5;
-  //       double front_rear_sum = std::abs(front_diff) + std::abs(rear_diff);
-  //       double front_rear_weight =
-  //         front_rear_sum < 1e-1 ? 0.5 : std::abs(rear_diff) / front_rear_sum;
-
-  //       if (front_rear_weight > 0.5) {
-  //         is_close_to_front = true;
-  //         // snap front
-  //         comp_diff_x = (tracker_object.shape.dimensions.x - object.shape.dimensions.x) * 0.5;
-  //       } else {
-  //         is_close_to_front = false;
-  //         // snap rear
-  //         comp_diff_x = -(tracker_object.shape.dimensions.x - object.shape.dimensions.x) * 0.5;
-  //       }
-  //     }
-
-  //     // if width is small, snap left or right
-  //     if (
-  //       tracker_object.shape.dimensions.y * min_length_ratio_for_partial_detection >
-  //       object.shape.dimensions.y) {
-  //       is_lat_partial_detect = true;
-
-  //       double left_diff =
-  //         local_y + (object.shape.dimensions.y - tracker_object.shape.dimensions.y) * 0.5;
-  //       double right_diff =
-  //         local_y - (object.shape.dimensions.y - tracker_object.shape.dimensions.y) * 0.5;
-  //       double left_right_sum = std::abs(left_diff) + std::abs(right_diff);
-  //       double left_right_weight =
-  //         left_right_sum < 1e-1 ? 0.5 : std::abs(right_diff) / left_right_sum;
-
-  //       if (left_right_weight > 0.5) {
-  //         // snap left
-  //         comp_diff_y = (tracker_object.shape.dimensions.y - object.shape.dimensions.y) * 0.5;
-  //       } else {
-  //         // snap right
-  //         comp_diff_y = -(tracker_object.shape.dimensions.y - object.shape.dimensions.y) * 0.5;
-  //       }
-  //     }
-
-  //     // model pose covariance increase due to compensation
-  //   }
-  // }
-
   // update
   bool is_updated = false;
   {
@@ -464,23 +369,19 @@ bool VehicleTracker::conditionedUpdate(
   std::array<double, 36> pose_cov = measurement.pose_covariance;
 
   bool is_updated = false;
-  double comp_diff_x = 0.0;
-  double comp_diff_y = 0.0;
+  double comp_diff_x = strategy.offset_x;
+  double comp_diff_y = strategy.offset_y;
   if (strategy.type == UpdateStrategyType::FRONT_WHEEL_UPDATE) {
     shape_update_anchor_ = BicycleMotionModel::LengthUpdateAnchor::FRONT;
 
     is_updated = motion_model_.updateStatePoseFront(
       strategy.anchor_point.x, strategy.anchor_point.y, pose_cov);
-
-    // comp_diff_x = strategy.anchor_point.x - object_.pose.position.x;
   } else {
     // Must be REAR_WHEEL_UPDATE (only remaining option after WEAK_UPDATE check)
     shape_update_anchor_ = BicycleMotionModel::LengthUpdateAnchor::REAR;
 
     is_updated =
       motion_model_.updateStatePoseRear(strategy.anchor_point.x, strategy.anchor_point.y, pose_cov);
-
-    // comp_diff_x = strategy.anchor_point.x - object_.pose.position.x;
   }
 
   // update object shape footprint
@@ -506,6 +407,8 @@ UpdateStrategy VehicleTracker::determineUpdateStrategy(
   const types::DynamicObject & measurement, const types::DynamicObject & prediction) const
 {
   UpdateStrategy strategy;
+  strategy.offset_x = 0.0;
+  strategy.offset_y = 0.0;
 
   // 1. Calculate edge centers for measurement vehicle
   const EdgePositions meas_edges = calculateEdgeCenters(measurement);
@@ -529,6 +432,14 @@ UpdateStrategy VehicleTracker::determineUpdateStrategy(
                     ? UpdateStrategyType::FRONT_WHEEL_UPDATE
                     : UpdateStrategyType::REAR_WHEEL_UPDATE;
   strategy.anchor_point = calculateAnchorPoint(alignment, measurement);
+
+  const double l_track = prediction.shape.dimensions.x;
+  const double l_meas = measurement.shape.dimensions.x;
+  if (strategy.type == UpdateStrategyType::FRONT_WHEEL_UPDATE) {
+    strategy.offset_x = (l_track - l_meas) * 0.5;
+  } else {
+    strategy.offset_x = (l_meas - l_track) * 0.5;
+  }
 
   return strategy;
 }
