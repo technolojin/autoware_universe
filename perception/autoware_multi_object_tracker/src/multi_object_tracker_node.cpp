@@ -52,11 +52,6 @@ using LabelType = autoware_perception_msgs::msg::ObjectClassification::_label_ty
 MultiObjectTracker::MultiObjectTracker(const rclcpp::NodeOptions & node_options)
 : rclcpp::Node("multi_object_tracker", node_options)
 {
-  // glog for debug
-  if (!google::IsGoogleLoggingInitialized()) {
-    google::InitGoogleLogging("multi_object_tracker");
-    google::InstallFailureSignalHandler();
-  }
 
   // Get parameters
   params_.publish_rate = declare_parameter<double>("publish_rate");  // [hz]
