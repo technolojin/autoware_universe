@@ -88,7 +88,7 @@ void process_parameters(MultiObjectTrackerParameters & params)
 
   auto getTrackerType = [](const std::string & tracker_name) -> TrackerType {
     auto it = TRACKER_TYPE_MAP.find(tracker_name);
-    return it != TRACKER_TYPE_MAP.end() ? it->second : TrackerType::UNKNOWN;
+    return it != TRACKER_TYPE_MAP.end() ? it->second : TrackerType::POLYGON;
   };
 
   // Set the tracker map for processor config
@@ -109,7 +109,7 @@ void process_parameters(MultiObjectTrackerParameters & params)
     std::make_pair(
       Label::MOTORCYCLE, getTrackerType(params.tracker_type_map.at("motorcycle_tracker"))));
   params.processor_config.tracker_map.insert(
-    std::make_pair(Label::UNKNOWN, TrackerType::UNKNOWN));  // Default for unknown objects
+    std::make_pair(Label::UNKNOWN, TrackerType::POLYGON));  // Default for unknown objects
 
   // Set the pruning thresholds for processor config
   for (size_t i = 0; i < params.pruning_giou_thresholds.size(); ++i) {
