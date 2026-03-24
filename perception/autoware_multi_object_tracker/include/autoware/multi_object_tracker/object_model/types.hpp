@@ -129,10 +129,16 @@ inline std::optional<TrackerType> toTrackerType(const std::string & tracker_name
 // constants
 constexpr float default_existence_probability = 0.75;
 
+enum class InputMessageType : uint8_t {
+  DETECTED_OBJECTS = 0,
+  TRACKED_OBJECTS = 1,
+};
+
 // channel configuration
 struct InputChannel
 {
   uint index;                                 // index of the channel
+  InputMessageType type = InputMessageType::DETECTED_OBJECTS; // type of the input message
   bool is_enabled = true;                     // enable the channel
   std::string long_name = "Detected Object";  // full name of the detection
   std::string short_name = "DET";             // abbreviation of the name
