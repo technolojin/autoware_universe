@@ -15,6 +15,12 @@ inputs:
 outputs:
   - name: trajectory
     message_type: autoware_planning_msgs/msg/Trajectory
+    remap_target: ~/output/path
+  - name: virtual_wall
+    message_type: visualization_msgs/msg/MarkerArray
+    remap_target: ~/virtual_wall
+
+# parameters
 parameter_files:
   - name: path_optimizer_param
     default: $(find-pkg-share autoware_path_optimizer)/config/path_optimizer.param.yaml
