@@ -55,8 +55,8 @@ inputs:
   - name: acceleration
     message_type: geometry_msgs/msg/AccelWithCovarianceStamped
 
-outputs:
-  - name: control_cmd
+publishers:
+  - name: command/control_cmd
     message_type: autoware_control_msgs/msg/Control
   - name: gear_cmd
     message_type: autoware_vehicle_msgs/msg/GearCommand
@@ -82,4 +82,4 @@ processes:
     trigger_conditions:
       - periodic: 10.0
     outcomes:
-      - to_output: control_cmd
+      - to_output: command/control_cmd
