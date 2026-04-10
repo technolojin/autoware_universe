@@ -54,6 +54,10 @@ private:
   float total_existence_probability_;
   std::vector<classes::Classification> classification_;
 
+  // shadow/pairing state: when true, this tracker is an internal fallback shadow
+  // (participates in association/update but is excluded from published output)
+  bool is_shadow_;
+
   // conditioned update configs
   // EMA/ema below are abbreviation for exponential moving average
   static constexpr double EMA_ALPHA_WEAK = 0.05;
@@ -98,6 +102,13 @@ public:
     object_.area = types::getArea(shape);
   }
 
+  // Partial update from a paired polygon fallback tracker.
+  // Updates position via a weak pseudo-measurement while preserving class/shape.
+  // Returns true if the update was applied; false if not supported (base default).
+  virtual bool partialUpdateFromPolygonMeasurement(
+    const types::DynamicObject & polygon_object, const rclcpp::Time & time,
+    const types::InputChannel & channel_info);
+
   // object life management
   uint getChannelIndex() const;
   void getPositionCovarianceEigenSq(
@@ -117,6 +128,10 @@ public:
   {
     return classes::getHighestProbLabel(object_.classification);
   }
+
+  // shadow/pairing accessors
+  bool isShadow() const { return is_shadow_; }
+  void setShadow(bool shadow) { is_shadow_ = shadow; }
 
   // existence states
   int getNoMeasurementCount() const { return no_measurement_count_; }
@@ -155,6 +170,10 @@ public:
 protected:
   types::DynamicObject object_;
   types::TrackerType tracker_type_{types::TrackerType::POLYGON};
+
+  // Update existence bookkeeping for a partial/fallback measurement.
+  // Resets no-measurement streak and applies a mild probability boost.
+  bool partialUpdateExistenceState(const rclcpp::Time & time);
 
   void updateCache(const types::DynamicObject & object, const rclcpp::Time & time) const
   {

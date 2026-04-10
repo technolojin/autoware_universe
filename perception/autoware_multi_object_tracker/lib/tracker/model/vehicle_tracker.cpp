@@ -473,6 +473,44 @@ geometry_msgs::msg::Point VehicleTracker::calculateAnchorPoint(
   return anchor_point;
 }
 
+bool VehicleTracker::partialUpdateFromPolygonMeasurement(
+  const types::DynamicObject & polygon_object, const rclcpp::Time & time,
+  const types::InputChannel & channel_info)
+{
+  // Obtain the current predicted state to use as the blending baseline.
+  types::DynamicObject prediction;
+  getTrackedObject(time, prediction);
+
+  // Keep the current bounding-box shape so the pseudo-measurement does not
+  // modify the vehicle's dimensions.
+  const auto tracker_shape = object_.shape;
+
+  // Force orientation to UNAVAILABLE: the polygon centroid carries no reliable
+  // heading information, so we must not update yaw from this fallback.
+  types::DynamicObject polygon_pos_only = polygon_object;
+  polygon_pos_only.kinematics.orientation_availability =
+    types::OrientationAvailability::UNAVAILABLE;
+
+  // Build pseudo-measurement by blending the polygon centroid position into
+  // the current predicted state, with the tracker's bounding-box shape and
+  // enlarged measurement covariance (weak update).
+  types::DynamicObject pseudo_meas = prediction;
+  createPseudoMeasurement(polygon_pos_only, pseudo_meas, tracker_shape, /*enlarge_covariance=*/true);
+
+  // Ensure the pseudo-measurement also carries UNAVAILABLE orientation so that
+  // VehicleTracker::measureWithPose skips yaw and calls updateStatePose only.
+  pseudo_meas.kinematics.orientation_availability = types::OrientationAvailability::UNAVAILABLE;
+
+  // Apply position-only motion model update.
+  measure(pseudo_meas, time, channel_info);
+
+  // Update existence bookkeeping (mild probability boost, reset no-measurement
+  // streak, advance last-update timestamp to prevent time-based expiry).
+  partialUpdateExistenceState(time);
+
+  return true;
+}
+
 void VehicleTracker::setObjectShape(const autoware_perception_msgs::msg::Shape & shape)
 {
   // Update object shape and area (base functionality)

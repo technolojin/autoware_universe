@@ -30,10 +30,22 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace autoware::multi_object_tracker
 {
+
+// Pairing record that links a known vehicle tracker to a shadow polygon tracker.
+// The shadow polygon tracker provides fallback position updates when the vehicle
+// tracker's main detector fails.
+struct TrackerPair
+{
+  unique_identifier_msgs::msg::UUID known_tracker_uuid;
+  unique_identifier_msgs::msg::UUID polygon_tracker_uuid;
+  rclcpp::Time last_confirmed_time;  // refreshed each cycle the overlap is still detected
+};
+
 class TrackerProcessor
 {
 public:
@@ -78,6 +90,22 @@ private:
     const Tracker & target, const Tracker & other, const rclcpp::Time & time) const;
   std::shared_ptr<Tracker> createNewTracker(
     const types::DynamicObject & object, const rclcpp::Time & time) const;
+
+  // Tracker pairing: known vehicle trackers paired with shadow polygon trackers
+  // known_tracker_uuid -> TrackerPair
+  std::unordered_map<
+    unique_identifier_msgs::msg::UUID, TrackerPair, types::UUIDHash, types::UUIDEqual>
+    tracker_pairs_;
+  // polygon_tracker_uuid -> known_tracker_uuid (reverse lookup)
+  std::unordered_map<
+    unique_identifier_msgs::msg::UUID, unique_identifier_msgs::msg::UUID, types::UUIDHash,
+    types::UUIDEqual>
+    shadow_to_known_uuid_;
+
+  void refreshOrCreatePair(
+    const std::shared_ptr<Tracker> & known_tracker,
+    const std::shared_ptr<Tracker> & polygon_tracker, const rclcpp::Time & time);
+  void expireStalePairs(const rclcpp::Time & time);
 
   std::shared_ptr<autoware_utils_debug::TimeKeeper> time_keeper_;
   std::optional<geometry_msgs::msg::Pose> ego_pose_;

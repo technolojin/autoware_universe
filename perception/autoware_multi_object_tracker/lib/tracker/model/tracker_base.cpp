@@ -60,6 +60,7 @@ Tracker::Tracker(const rclcpp::Time & time, const types::DynamicObject & detecte
   total_no_measurement_count_(0),
   total_measurement_count_(1),
   last_update_with_measurement_time_(time),
+  is_shadow_(false),
   object_(detected_object)
 {
   // Assign a persistent tracker UUID (separate from measurement UUIDs).
@@ -680,6 +681,36 @@ bool Tracker::conditionedUpdate(
   // measure(pseudo_measurement, measurement_time, channel_info);
   //
   // return true;
+}
+
+bool Tracker::partialUpdateExistenceState(const rclcpp::Time & time)
+{
+  // Reset the no-measurement streak so the tracker does not expire from count-based checks.
+  no_measurement_count_ = 0;
+
+  // Advance the last-measurement timestamp to prevent time-based expiry.
+  last_update_with_measurement_time_ = time;
+
+  // Apply a mild existence probability boost — weaker than a full measurement
+  // (true_positive=0.9) but enough to prevent pure exponential decay.
+  constexpr float partial_true_positive = 0.55f;
+  constexpr float probability_false_detection = 0.2f;
+  total_existence_probability_ = updateProbability(
+    total_existence_probability_, partial_true_positive, probability_false_detection);
+
+  // Refresh the cached object state.
+  getTrackedObject(time, object_);
+  object_.time = time;
+
+  return true;
+}
+
+bool Tracker::partialUpdateFromPolygonMeasurement(
+  const types::DynamicObject & /*polygon_object*/, const rclcpp::Time & /*time*/,
+  const types::InputChannel & /*channel_info*/)
+{
+  // Default: partial update not supported for this tracker type.
+  return false;
 }
 
 }  // namespace autoware::multi_object_tracker

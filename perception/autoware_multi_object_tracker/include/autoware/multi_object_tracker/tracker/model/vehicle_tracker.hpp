@@ -65,6 +65,13 @@ public:
     const autoware_perception_msgs::msg::Shape & tracker_shape,
     const rclcpp::Time & measurement_time, const types::InputChannel & channel_info) override;
 
+  // Partial position-only update from a paired unknown polygon fallback tracker.
+  // Blends the polygon centroid into the vehicle position without touching
+  // shape, classification, or yaw — uses enlarged covariance (weak update).
+  bool partialUpdateFromPolygonMeasurement(
+    const types::DynamicObject & polygon_object, const rclcpp::Time & time,
+    const types::InputChannel & channel_info) override;
+
   bool getTrackedObject(
     const rclcpp::Time & time, types::DynamicObject & object,
     const bool to_publish = false) const override;

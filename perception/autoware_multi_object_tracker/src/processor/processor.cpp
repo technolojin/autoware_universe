@@ -116,8 +116,34 @@ void TrackerProcessor::update(const types::AssociatedObjects & associated_object
         ->updateWithMeasurement(
           associated_object, time, channel_info, has_significant_shape_change);
     } else {
-      // not found
-      (*(tracker_itr))->updateWithoutMeasurement(time);
+      // not found: check if a paired shadow polygon tracker has a measurement
+      // that can provide a fallback position update.
+      // Guard: only apply if the tracker has missed at least one previous measurement
+      // (no_measurement_count_ > 0), which means the main detector is already failing.
+      // This prevents an unnecessary double-update when the main detector ran in an
+      // earlier batch during the same cycle.
+      bool partial_updated = false;
+      if ((*tracker_itr)->getNoMeasurementCount() > 0) {
+        const auto pair_it = tracker_pairs_.find(tracker_uuid);
+        if (pair_it != tracker_pairs_.end()) {
+          const auto & polygon_uuid = pair_it->second.polygon_tracker_uuid;
+          if (association_result.tracker_to_measurement.count(polygon_uuid)) {
+            const auto measurement_uuid =
+              association_result.tracker_to_measurement.at(polygon_uuid);
+            const auto polygon_idx = detected_objects.getObjectIndexByUuid(measurement_uuid);
+            if (polygon_idx) {
+              const auto & polygon_object = detected_objects.objects.at(*polygon_idx);
+              const types::InputChannel channel_info =
+                channels_config_[polygon_object.channel_index];
+              partial_updated = (*tracker_itr)->partialUpdateFromPolygonMeasurement(
+                polygon_object, time, channel_info);
+            }
+          }
+        }
+      }
+      if (!partial_updated) {
+        (*(tracker_itr))->updateWithoutMeasurement(time);
+      }
     }
   }
 }
@@ -213,6 +239,8 @@ void TrackerProcessor::prune(const rclcpp::Time & time)
   removeOldTracker(time);
   // Check tracker overlap: if the tracker is overlapped, delete the one with lower IOU
   mergeOverlappedTracker(time);
+  // Expire stale tracker pairs (overlap no longer confirmed for too long)
+  expireStalePairs(time);
 
   // update last prune time
   last_prune_time_ = time;
@@ -227,6 +255,34 @@ void TrackerProcessor::removeOldTracker(const rclcpp::Time & time)
   for (auto itr = list_tracker_.begin(); itr != list_tracker_.end(); ++itr) {
     // If the tracker is expired, delete it
     if ((*itr)->isExpired(time, adaptive_threshold_cache_, ego_pose_)) {
+      const auto uuid = (*itr)->getUUID();
+
+      // If this is a known tracker that has a paired shadow polygon tracker,
+      // promote the shadow tracker to a regular (published) tracker before
+      // removing the known one. This eliminates the transition gap.
+      const auto pair_it = tracker_pairs_.find(uuid);
+      if (pair_it != tracker_pairs_.end()) {
+        const auto & polygon_uuid = pair_it->second.polygon_tracker_uuid;
+        for (auto & tracker : list_tracker_) {
+          if (types::UUIDEqual{}(tracker->getUUID(), polygon_uuid)) {
+            tracker->setShadow(false);
+            break;
+          }
+        }
+        shadow_to_known_uuid_.erase(polygon_uuid);
+        tracker_pairs_.erase(pair_it);
+      }
+
+      // If this is a shadow polygon tracker expiring on its own, clean up
+      // its pair record so the known tracker no longer tries to use it.
+      if ((*itr)->isShadow()) {
+        const auto shadow_it = shadow_to_known_uuid_.find(uuid);
+        if (shadow_it != shadow_to_known_uuid_.end()) {
+          tracker_pairs_.erase(shadow_it->second);
+          shadow_to_known_uuid_.erase(shadow_it);
+        }
+      }
+
       auto erase_itr = itr;
       --itr;
       list_tracker_.erase(erase_itr);
@@ -405,7 +461,9 @@ void TrackerProcessor::mergeOverlappedTracker(const rclcpp::Time & time)
   // Second pass: merge overlapping trackers
   for (size_t i = 0; i < valid_trackers.size(); ++i) {
     auto & data1 = valid_trackers[i];
-    if (!data1.is_valid || !data1.tracker->isConfident(adaptive_threshold_cache_, ego_pose_, time))
+    if (
+      !data1.is_valid || data1.tracker->isShadow() ||
+      !data1.tracker->isConfident(adaptive_threshold_cache_, ego_pose_, time))
       continue;
 
     // Find nearby trackers using R-tree
@@ -435,31 +493,62 @@ void TrackerProcessor::mergeOverlappedTracker(const rclcpp::Time & time)
       auto & data2 = valid_trackers[idx2];
       if (!data2.is_valid) continue;
 
+      // Shadow trackers are managed by the pair lifecycle.
+      // If the shadow is still overlapping with data1, refresh the pair time.
+      if (data2.tracker->isShadow()) {
+        if (isIoUOverThreshold(data2, data1)) {
+          const auto shadow_it = shadow_to_known_uuid_.find(data2.tracker->getUUID());
+          if (
+            shadow_it != shadow_to_known_uuid_.end() &&
+            types::UUIDEqual{}(shadow_it->second, data1.tracker->getUUID())) {
+            auto pair_it = tracker_pairs_.find(data1.tracker->getUUID());
+            if (pair_it != tracker_pairs_.end()) {
+              pair_it->second.last_confirmed_time = time;
+            }
+          }
+        }
+        continue;  // never remove a shadow via normal merge
+      }
+
       if (
         canMergeOverlappedTarget(*data2.tracker, *data1.tracker, time) &&
         isIoUOverThreshold(data2, data1)) {
-        // Merge tracker2 into tracker1
+        // Check if this is a known-vehicle + unknown-polygon overlap.
+        // Instead of removing the polygon tracker, pair it as a shadow so it
+        // can provide fallback position updates when the vehicle tracker's
+        // main detector fails.
+        const bool is_data2_polygon =
+          (data2.tracker->getTrackerType() == types::TrackerType::POLYGON);
+        const bool is_data1_vehicle =
+          (data1.tracker->getKnownObjectProbability() >= 0.2f);
 
-        // probabilities
-        data1.tracker->updateTotalExistenceProbability(
-          data2.tracker->getTotalExistenceProbability());
-        data1.tracker->mergeExistenceProbabilities(data2.tracker->getExistenceProbabilityVector());
+        if (is_data2_polygon && is_data1_vehicle) {
+          refreshOrCreatePair(data1.tracker, data2.tracker, time);
+          // data2.is_valid stays true — shadow tracker remains in list_tracker_
+        } else {
+          // Merge tracker2 into tracker1 (existing behavior)
 
-        // classification
-        if (!data2.is_unknown) {
-          data1.tracker->updateClassification(data2.tracker->getClassification());
+          // probabilities
+          data1.tracker->updateTotalExistenceProbability(
+            data2.tracker->getTotalExistenceProbability());
+          data1.tracker->mergeExistenceProbabilities(
+            data2.tracker->getExistenceProbabilityVector());
+
+          // classification
+          if (!data2.is_unknown) {
+            data1.tracker->updateClassification(data2.tracker->getClassification());
+          }
+
+          // shape: keep the higher priority shape type
+          // bounding box: 0, cylinder: 1, convex hull: 2
+          if (data1.object.shape.type > data2.object.shape.type) {
+            data1.tracker->setObjectShape(data2.object.shape);
+          }
+
+          // Mark tracker2 for removal
+          data2.is_valid = false;
+          to_remove.push_back(idx2);
         }
-
-        // shape
-        // set the shape of higher priority shape
-        // bounding box: 0, cylinder: 1, convex hull: 2
-        if (data1.object.shape.type > data2.object.shape.type) {
-          data1.tracker->setObjectShape(data2.object.shape);
-        }
-
-        // Mark tracker2 for removal
-        data2.is_valid = false;
-        to_remove.push_back(idx2);
       }
     }
   }
@@ -548,6 +637,8 @@ void TrackerProcessor::getTrackedObjects(
   tracked_objects.header.stamp = time;
   types::DynamicObject tracked_object;
   for (const auto & tracker : list_tracker_) {
+    // shadow trackers are internal only — never publish them
+    if (tracker->isShadow()) continue;
     // check if the tracker is confident, if not, skip
     if (!tracker->isConfident(adaptive_threshold_cache_, ego_pose_, std::nullopt)) continue;
     // Get the tracked object, extrapolated to the given time
@@ -571,6 +662,8 @@ void TrackerProcessor::getTentativeObjects(
   tentative_objects.header.stamp = time;
   types::DynamicObject tracked_object;
   for (const auto & tracker : list_tracker_) {
+    // shadow trackers are internal only — never publish them
+    if (tracker->isShadow()) continue;
     // check if the tracker is confident, if so, skip
     if (tracker->isConfident(adaptive_threshold_cache_, ego_pose_, std::nullopt)) continue;
     // Get the tracked object, extrapolated to the given time
@@ -593,6 +686,7 @@ void TrackerProcessor::getMergedObjects(
   merged_objects.objects.reserve(list_tracker_.size());
   types::DynamicObject tracked_object;
   for (const auto & tracker : list_tracker_) {
+    if (tracker->isShadow()) continue;
     constexpr bool to_publish = false;
     if (tracker->getTrackedObject(time, tracked_object, to_publish)) {
       merged_objects.objects.push_back(types::toDetectedObjectMsg(tracked_object));
@@ -645,6 +739,56 @@ void TrackerProcessor::getMergedObjects(
     pose.orientation.x = tf_qw * obj_q.x + tf_qx * obj_q.w + tf_qy * obj_q.z - tf_qz * obj_q.y;
     pose.orientation.y = tf_qw * obj_q.y - tf_qx * obj_q.z + tf_qy * obj_q.w + tf_qz * obj_q.x;
     pose.orientation.z = tf_qw * obj_q.z + tf_qx * obj_q.y - tf_qy * obj_q.x + tf_qz * obj_q.w;
+  }
+}
+
+void TrackerProcessor::refreshOrCreatePair(
+  const std::shared_ptr<Tracker> & known_tracker,
+  const std::shared_ptr<Tracker> & polygon_tracker, const rclcpp::Time & time)
+{
+  const auto known_uuid = known_tracker->getUUID();
+  const auto polygon_uuid = polygon_tracker->getUUID();
+
+  const auto pair_it = tracker_pairs_.find(known_uuid);
+  if (pair_it != tracker_pairs_.end()) {
+    // Refresh existing pair timestamp
+    pair_it->second.last_confirmed_time = time;
+  } else {
+    // Create a new pair record
+    TrackerPair pair;
+    pair.known_tracker_uuid = known_uuid;
+    pair.polygon_tracker_uuid = polygon_uuid;
+    pair.last_confirmed_time = time;
+    tracker_pairs_.emplace(known_uuid, pair);
+    shadow_to_known_uuid_.emplace(polygon_uuid, known_uuid);
+
+    // Mark the polygon tracker as a shadow (internal, not published)
+    polygon_tracker->setShadow(true);
+  }
+}
+
+void TrackerProcessor::expireStalePairs(const rclcpp::Time & time)
+{
+  // If overlap is no longer confirmed for longer than this duration, break the
+  // pair and promote the shadow polygon tracker back to a regular tracker.
+  constexpr double pair_expiry_seconds = 0.5;
+
+  for (auto it = tracker_pairs_.begin(); it != tracker_pairs_.end();) {
+    const double elapsed = (time - it->second.last_confirmed_time).seconds();
+    if (elapsed > pair_expiry_seconds) {
+      const auto & polygon_uuid = it->second.polygon_tracker_uuid;
+      // Promote the shadow polygon tracker to a regular (published) tracker
+      for (auto & tracker : list_tracker_) {
+        if (types::UUIDEqual{}(tracker->getUUID(), polygon_uuid)) {
+          tracker->setShadow(false);
+          break;
+        }
+      }
+      shadow_to_known_uuid_.erase(polygon_uuid);
+      it = tracker_pairs_.erase(it);
+    } else {
+      ++it;
+    }
   }
 }
 
