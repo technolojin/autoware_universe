@@ -54,6 +54,11 @@ inputs:
     message_type: nav_msgs/msg/Odometry
   - name: acceleration
     message_type: geometry_msgs/msg/AccelWithCovarianceStamped
+    remap_target: input/acceleration
+  - name: engage
+    global: /autoware/engage
+    message_type: autoware_vehicle_msgs/msg/Engage
+    remap_target: input/engage
 
 publishers:
   - name: command/control_cmd
@@ -68,6 +73,8 @@ publishers:
     message_type: tier4_control_msgs/msg/GateMode
   - name: engage
     message_type: autoware_vehicle_msgs/msg/Engage
+    remap_target: output/engage
+    global: /api/autoware/get/engage
   - name: operation_mode
     message_type: autoware_adapi_v1_msgs/msg/OperationModeState
   - name: vehicle_cmd_emergency

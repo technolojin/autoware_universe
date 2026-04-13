@@ -21,10 +21,23 @@ inputs:
   - name: control_mode_report
     message_type: autoware_vehicle_msgs/msg/ControlModeReport
   - name: gate_operation_mode
+    message_type: tier4_control_msgs/msg/GateMode
+    remap_target: gate_operation_mode
+  - name: engage
+    message_type: autoware_vehicle_msgs/msg/Engage
+    global: /autoware/engage
+
+publishers:
+  - name: operation_mode
     message_type: autoware_adapi_v1_msgs/msg/OperationModeState
-outputs:
+    global: /system/operation_mode/state
+  - name: engage
+    message_type: autoware_vehicle_msgs/msg/Engage
+    global: /autoware/engage
   - name: is_autonomous_available
     message_type: std_msgs/msg/Bool
+
+clients:
   - name: control_mode_request
     message_type: autoware_vehicle_msgs/msg/ControlModeCommand
 parameter_files:
