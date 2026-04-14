@@ -48,6 +48,9 @@ constexpr double W_HEIGHT = 0.1;
 constexpr double AZIMUTH_IOU_SHAPE_CHECK_THRESHOLD = 0.7;
 constexpr double AREA_RATIO_THRESHOLD = 1.3;
 
+// Radial distance gate: maximum allowed gap between the two range intervals [m]
+constexpr double RADIAL_GAP_THRESHOLD = 2.0;
+
 // Azimuth bin helpers
 // 24 bins × 15° (π/12 rad) each, covering the full [0, 2π) circle.
 constexpr double kAzimuthBinWidth =
@@ -231,14 +234,20 @@ void PolarAssociation::processMeasurement(
     // Skip fully occluded trackers
     if (visibility <= 0.0) continue;
 
-    // Gate 1: Azimuth IoU (primary matching criterion)
+    // Gate 1: Radial distance – skip if the range intervals are farther apart than 3 m
+    const double radial_gap = std::max(
+      0.0,
+      std::max(meas_fp.r_min, tracker_fp.r_min) - std::min(meas_fp.r_max, tracker_fp.r_max));
+    if (radial_gap > RADIAL_GAP_THRESHOLD) continue;
+
+    // Gate 2: Azimuth IoU (primary matching criterion)
     const double az_iou = polar_scoring::azimuthIoU(meas_fp.azimuth, tracker_fp.azimuth);
 
-    // Gate 2: Radial compatibility
+    // Gate 3: Radial compatibility
     const double rad_compat = polar_scoring::radialCompatibility(
       meas_fp.r_min, meas_fp.r_max, tracker_fp.r_min, tracker_fp.r_max);
 
-    // Gate 3: Height compatibility
+    // Gate 4: Height compatibility
     const double h_iou =
       polar_scoring::heightIoU(meas_fp.z_min, meas_fp.z_max, tracker_fp.z_min, tracker_fp.z_max);
 
