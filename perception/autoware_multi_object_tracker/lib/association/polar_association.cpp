@@ -14,18 +14,380 @@
 
 #include "autoware/multi_object_tracker/association/polar_association.hpp"
 
+#include "autoware/multi_object_tracker/association/scoring/polar_scoring.hpp"
+#include "autoware/multi_object_tracker/association/solver/gnn_solver.hpp"
+#include "autoware/multi_object_tracker/types.hpp"
+
+#include <rclcpp/rclcpp.hpp>
+#include <tf2/utils.hpp>
+
+#include <algorithm>
+#include <cmath>
+#include <iterator>
 #include <list>
+#include <memory>
+#include <numeric>
+#include <unordered_map>
+#include <utility>
+#include <vector>
 
 namespace autoware::multi_object_tracker
 {
+namespace
+{
+constexpr double INVALID_SCORE = 0.0;
+
+// Scoring weights: azimuth IoU is prioritized over radial and height
+constexpr double W_AZIMUTH = 0.7;
+constexpr double W_RADIAL = 0.2;
+constexpr double W_HEIGHT = 0.1;
+
+// Shape change detection thresholds (same semantics as BEV)
+constexpr double AZIMUTH_IOU_SHAPE_CHECK_THRESHOLD = 0.7;
+constexpr double AREA_RATIO_THRESHOLD = 1.3;
+}  // namespace
+
+using autoware_utils_debug::ScopedTimeTrack;
+
+// -- Construction & configuration --
+
+PolarAssociation::PolarAssociation(const AssociatorConfig & config)
+: config_(config), score_threshold_(0.01)
+{
+  gnn_solver_ptr_ = std::make_unique<gnn_solver::MuSSP>();
+  updateMaxSearchDistances();
+}
+
+void PolarAssociation::setEgoPose(const std::optional<geometry_msgs::msg::Pose> & ego_pose)
+{
+  ego_pose_ = ego_pose;
+}
+
+void PolarAssociation::setTimeKeeper(
+  std::shared_ptr<autoware_utils_debug::TimeKeeper> time_keeper_ptr)
+{
+  time_keeper_ = std::move(time_keeper_ptr);
+}
+
+void PolarAssociation::updateMaxSearchDistances()
+{
+  max_squared_dist_per_class_.clear();
+  for (const auto measurement_label : classes::trackedLabels()) {
+    double max_squared_dist = 0.0;
+    const auto tracker_params_map_opt =
+      get_map_value_if_exists(config_.association_params_map, measurement_label);
+    if (!tracker_params_map_opt) continue;
+    const auto & tracker_params_map = tracker_params_map_opt->get();
+    for (const auto & [tracker_type, association_params] : tracker_params_map) {
+      static_cast<void>(tracker_type);
+      max_squared_dist = std::max(max_squared_dist, association_params.max_dist_sq);
+    }
+    max_squared_dist_per_class_.insert_or_assign(measurement_label, max_squared_dist);
+  }
+}
+
+// -- Top-level associate --
 
 types::AssociationResult PolarAssociation::associate(
-  const types::DynamicObjectList & /*measurements*/,
-  const std::list<std::shared_ptr<Tracker>> & /*trackers*/)
+  const types::DynamicObjectList & measurements,
+  const std::list<std::shared_ptr<Tracker>> & trackers)
 {
-  // TODO(polar_association): implement range-bearing based association.
-  // For now, return an empty result (all measurements unassigned, all trackers unassigned).
-  return types::AssociationResult{};
+  const types::AssociationData data = calcAssociationData(measurements, trackers);
+  types::AssociationResult result;
+  assign(data, result);
+  return result;
+}
+
+// -- Data preparation --
+
+PolarAssociation::PolarPreparationData PolarAssociation::prepareAssociationData(
+  const types::DynamicObjectList & measurements,
+  const std::list<std::shared_ptr<Tracker>> & trackers, const double ego_x, const double ego_y,
+  const double ego_yaw)
+{
+  PolarPreparationData prep_data;
+  const size_t num_trackers = trackers.size();
+
+  prep_data.tracked_objects.reserve(num_trackers);
+  prep_data.tracker_labels.reserve(num_trackers);
+  prep_data.tracker_types.reserve(num_trackers);
+  prep_data.tracker_footprints.reserve(num_trackers);
+
+  // Extract tracked objects and build R-tree spatial index
+  {
+    size_t tracker_idx = 0;
+    std::vector<polar_detail::ValueType> rtree_points;
+    rtree_.clear();
+    rtree_points.reserve(num_trackers);
+
+    for (const auto & tracker : trackers) {
+      types::DynamicObject tracked_object;
+      tracker->getTrackedObject(measurements.header.stamp, tracked_object);
+
+      polar_detail::Point p(tracked_object.pose.position.x, tracked_object.pose.position.y);
+      rtree_points.emplace_back(p, tracker_idx);
+
+      // Compute polar footprint for this tracker
+      prep_data.tracker_footprints.emplace_back(
+        polar_scoring::computePolarFootprint(tracked_object, ego_x, ego_y, ego_yaw));
+
+      prep_data.tracked_objects.emplace_back(std::move(tracked_object));
+      prep_data.tracker_labels.emplace_back(tracker->getHighestProbLabel());
+      prep_data.tracker_types.emplace_back(tracker->getTrackerType());
+      ++tracker_idx;
+    }
+    rtree_.insert(rtree_points.begin(), rtree_points.end());
+  }
+
+  // Compute occlusion-based visibility ratios
+  // Sort trackers by minimum range (nearest first)
+  std::vector<size_t> range_sorted_indices(num_trackers);
+  std::iota(range_sorted_indices.begin(), range_sorted_indices.end(), 0);
+  std::sort(range_sorted_indices.begin(), range_sorted_indices.end(), [&](size_t a, size_t b) {
+    return prep_data.tracker_footprints[a].r_min < prep_data.tracker_footprints[b].r_min;
+  });
+
+  prep_data.visibility_ratios.assign(num_trackers, 1.0);
+  for (size_t i = 0; i < range_sorted_indices.size(); ++i) {
+    const size_t target_idx = range_sorted_indices[i];
+    const auto & target_fp = prep_data.tracker_footprints[target_idx];
+    double visible = 1.0;
+
+    // Check all closer trackers for occlusion
+    for (size_t j = 0; j < i; ++j) {
+      const size_t occluder_idx = range_sorted_indices[j];
+      const auto & occluder_fp = prep_data.tracker_footprints[occluder_idx];
+      // Only consider occlusion if the occluder is strictly in front
+      if (occluder_fp.r_max < target_fp.r_min) {
+        visible *= polar_scoring::visibleFraction(target_fp.azimuth, occluder_fp.azimuth);
+      }
+    }
+    prep_data.visibility_ratios[target_idx] = visible;
+  }
+
+  return prep_data;
+}
+
+// -- Per-measurement scoring --
+
+void PolarAssociation::processMeasurement(
+  const types::DynamicObject & measurement_object, const size_t measurement_idx,
+  const classes::Label measurement_label, const PolarPreparationData & prep_data,
+  const double ego_x, const double ego_y, const double ego_yaw,
+  types::AssociationData & association_data)
+{
+  const auto tracker_params_map_opt =
+    get_map_value_if_exists(config_.association_params_map, measurement_label);
+  if (!tracker_params_map_opt) return;
+  const auto & tracker_params_map = tracker_params_map_opt->get();
+
+  const auto max_squared_dist_opt =
+    get_map_value_if_exists(max_squared_dist_per_class_, measurement_label);
+  const double max_squared_dist = max_squared_dist_opt ? max_squared_dist_opt->get() : 0.0;
+
+  // R-tree query: find nearby trackers
+  polar_detail::Point measurement_point(
+    measurement_object.pose.position.x, measurement_object.pose.position.y);
+
+  std::vector<polar_detail::ValueType> nearby_trackers;
+  nearby_trackers.reserve(std::min(size_t{100}, prep_data.tracked_objects.size()));
+
+  const double max_dist = std::sqrt(max_squared_dist);
+  const polar_detail::Box query_box(
+    polar_detail::Point(
+      measurement_point.get<0>() - max_dist, measurement_point.get<1>() - max_dist),
+    polar_detail::Point(
+      measurement_point.get<0>() + max_dist, measurement_point.get<1>() + max_dist));
+  rtree_.query(
+    boost::geometry::index::within(query_box), std::back_inserter(nearby_trackers));
+
+  // Compute measurement polar footprint
+  const auto meas_fp =
+    polar_scoring::computePolarFootprint(measurement_object, ego_x, ego_y, ego_yaw);
+
+  for (const auto & tracker_value : nearby_trackers) {
+    const size_t tracker_idx = tracker_value.second;
+    const auto tracker_type = prep_data.tracker_types[tracker_idx];
+
+    const auto association_params_opt = get_map_value_if_exists(tracker_params_map, tracker_type);
+    if (!association_params_opt) continue;
+    const auto & association_params = association_params_opt->get();
+
+    const auto & tracked_object = prep_data.tracked_objects[tracker_idx];
+    const auto & tracker_fp = prep_data.tracker_footprints[tracker_idx];
+    const double visibility = prep_data.visibility_ratios[tracker_idx];
+
+    // Gate 1: Euclidean distance (same as BEV)
+    const double dx = measurement_object.pose.position.x - tracked_object.pose.position.x;
+    const double dy = measurement_object.pose.position.y - tracked_object.pose.position.y;
+    const double dist_sq = dx * dx + dy * dy;
+    if (dist_sq > association_params.max_dist_sq) continue;
+
+    // Skip fully occluded trackers
+    if (visibility <= 0.0) continue;
+
+    // Gate 2: Azimuth IoU (primary matching criterion)
+    const double az_iou = polar_scoring::azimuthIoU(meas_fp.azimuth, tracker_fp.azimuth);
+
+    // Gate 3: Radial compatibility
+    const double rad_compat =
+      polar_scoring::radialCompatibility(meas_fp.r_min, meas_fp.r_max, tracker_fp.r_min, tracker_fp.r_max);
+
+    // Gate 4: Height compatibility
+    const double h_iou =
+      polar_scoring::heightIoU(meas_fp.z_min, meas_fp.z_max, tracker_fp.z_min, tracker_fp.z_max);
+
+    // Combined score with azimuth prioritized
+    double raw_score = az_iou * (W_AZIMUTH + W_RADIAL * rad_compat + W_HEIGHT * h_iou);
+
+    // Adjust score for partial occlusion: boost score to compensate for reduced visible area
+    if (visibility < 1.0) {
+      raw_score = std::min(raw_score / visibility, 1.0);
+    }
+
+    const double min_iou = association_params.min_iou;
+    if (raw_score < min_iou) continue;
+
+    // Normalize score to [0, 1], same convention as BEV
+    const double score = (raw_score - min_iou) / (1.0 - min_iou);
+
+    // Shape change detection for vehicle trackers
+    bool has_significant_shape_change = false;
+    if (az_iou < AZIMUTH_IOU_SHAPE_CHECK_THRESHOLD && isVehicleTrackerType(tracker_type)) {
+      const double area_meas = measurement_object.area;
+      const double area_trk = tracked_object.area;
+      if (area_meas > 0.0 && area_trk > 0.0) {
+        const double area_ratio = std::max(area_trk, area_meas) / std::min(area_trk, area_meas);
+        if (area_ratio > AREA_RATIO_THRESHOLD) {
+          has_significant_shape_change = true;
+        }
+      }
+    }
+
+    if (score > INVALID_SCORE) {
+      association_data.entries.emplace_back(
+        types::AssociationEntry{tracker_idx, measurement_idx, score, has_significant_shape_change});
+    }
+  }
+}
+
+// -- Full association data computation --
+
+types::AssociationData PolarAssociation::calcAssociationData(
+  const types::DynamicObjectList & measurements,
+  const std::list<std::shared_ptr<Tracker>> & trackers)
+{
+  std::unique_ptr<ScopedTimeTrack> st_ptr;
+  if (time_keeper_) st_ptr = std::make_unique<ScopedTimeTrack>(__func__, *time_keeper_);
+
+  if (measurements.objects.empty() || trackers.empty() || !ego_pose_) {
+    if (!ego_pose_) {
+      static rclcpp::Clock steady_clock{RCL_STEADY_TIME};
+      RCLCPP_WARN_THROTTLE(
+        rclcpp::get_logger("polar_association"), steady_clock, 5000,
+        "PolarAssociation: ego_pose not set, returning empty association");
+    }
+    return types::AssociationData{};
+  }
+
+  const double ego_x = ego_pose_->position.x;
+  const double ego_y = ego_pose_->position.y;
+  const double ego_yaw = tf2::getYaw(ego_pose_->orientation);
+
+  auto prep_data = prepareAssociationData(measurements, trackers, ego_x, ego_y, ego_yaw);
+
+  types::AssociationData association_data;
+  association_data.tracker_uuids.reserve(trackers.size());
+  association_data.measurement_uuids.reserve(measurements.objects.size());
+
+  for (const auto & object : measurements.objects) {
+    association_data.measurement_uuids.emplace_back(object.uuid);
+  }
+  for (const auto & tracker : trackers) {
+    association_data.tracker_uuids.emplace_back(tracker->getUUID());
+  }
+
+  for (auto it = measurements.objects.begin(); it != measurements.objects.end(); ++it) {
+    const size_t measurement_idx = std::distance(measurements.objects.begin(), it);
+    const auto measurement_label = classes::getHighestProbLabel(it->classification);
+
+    processMeasurement(
+      *it, measurement_idx, measurement_label, prep_data, ego_x, ego_y, ego_yaw,
+      association_data);
+  }
+
+  return association_data;
+}
+
+// -- Assignment (GNN solver) --
+
+void PolarAssociation::assign(
+  const types::AssociationData & data, types::AssociationResult & association_result)
+{
+  std::unique_ptr<ScopedTimeTrack> st_ptr;
+  if (time_keeper_) st_ptr = std::make_unique<ScopedTimeTrack>(__func__, *time_keeper_);
+
+  std::unordered_map<int, int> direct_assignment;
+  std::unordered_map<int, int> reverse_assignment;
+
+  std::vector<std::vector<double>> score = formatScoreMatrix(data);
+
+  // Solve the linear assignment problem
+  gnn_solver_ptr_->maximizeLinearAssignment(score, &direct_assignment, &reverse_assignment);
+
+  // Build a lookup map for entries with significant shape change
+  std::unordered_map<int, std::unordered_map<int, const types::AssociationEntry *>> entry_map;
+  for (const auto & entry : data.entries) {
+    if (entry.has_significant_shape_change && entry.score >= score_threshold_) {
+      entry_map[static_cast<int>(entry.tracker_idx)][static_cast<int>(entry.measurement_idx)] =
+        &entry;
+    }
+  }
+
+  association_result.unassigned_trackers.reserve(data.tracker_uuids.size());
+  association_result.unassigned_measurements.reserve(data.measurement_uuids.size());
+
+  for (const auto & [tracker_idx, measurement_idx] : direct_assignment) {
+    if (score[tracker_idx][measurement_idx] >= score_threshold_) {
+      association_result.add(
+        data.tracker_uuids[tracker_idx], data.measurement_uuids[measurement_idx]);
+
+      auto tracker_it = entry_map.find(tracker_idx);
+      if (tracker_it != entry_map.end()) {
+        auto measurement_it = tracker_it->second.find(measurement_idx);
+        if (measurement_it != tracker_it->second.end()) {
+          association_result.trackers_with_shape_change.insert(data.tracker_uuids[tracker_idx]);
+        }
+      }
+    }
+  }
+
+  for (size_t i = 0; i < data.tracker_uuids.size(); ++i) {
+    auto it = direct_assignment.find(static_cast<int>(i));
+    if (
+      it == direct_assignment.end() || score[static_cast<int>(i)][it->second] < score_threshold_) {
+      association_result.unassigned_trackers.emplace_back(data.tracker_uuids[i]);
+    }
+  }
+
+  for (size_t i = 0; i < data.measurement_uuids.size(); ++i) {
+    auto it = reverse_assignment.find(static_cast<int>(i));
+    if (
+      it == reverse_assignment.end() || score[it->second][static_cast<int>(i)] < score_threshold_) {
+      association_result.unassigned_measurements.emplace_back(data.measurement_uuids[i]);
+    }
+  }
+}
+
+std::vector<std::vector<double>> PolarAssociation::formatScoreMatrix(
+  const types::AssociationData & data) const
+{
+  std::vector<std::vector<double>> score_matrix(
+    data.tracker_uuids.size(), std::vector<double>(data.measurement_uuids.size(), 0.0));
+  for (const auto & entry : data.entries) {
+    score_matrix[entry.tracker_idx][entry.measurement_idx] = entry.score;
+  }
+  return score_matrix;
 }
 
 }  // namespace autoware::multi_object_tracker

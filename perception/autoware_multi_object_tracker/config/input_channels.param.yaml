@@ -9,7 +9,7 @@
           short_name: "all"
       # LIDAR - rule-based
       lidar_clustering:
-        associator_type: bev
+        associator_type: polar
         flags:
           can_spawn_new_tracker: true
           can_trust_existence_probability: false
