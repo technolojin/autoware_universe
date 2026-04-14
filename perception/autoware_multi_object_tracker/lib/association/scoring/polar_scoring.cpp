@@ -35,8 +35,7 @@ constexpr double MIN_SPAN = 1e-6;  // Minimum span to avoid division by zero
 }  // namespace
 
 PolarFootprint computePolarFootprint(
-  const types::DynamicObject & object, const double ego_x, const double ego_y,
-  const double ego_yaw)
+  const types::DynamicObject & object, const double ego_x, const double ego_y, const double ego_yaw)
 {
   // Get the 2D polygon corners in map frame
   const auto polygon = autoware_utils_geometry::to_polygon2d(object.pose, object.shape);

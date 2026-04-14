@@ -19,8 +19,9 @@
 #include "autoware/multi_object_tracker/types.hpp"
 
 #include <rclcpp/rclcpp.hpp>
-#include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 #include <tf2/utils.hpp>
+
+#include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -199,8 +200,7 @@ void PolarAssociation::processMeasurement(
       measurement_point.get<0>() - max_dist, measurement_point.get<1>() - max_dist),
     polar_detail::Point(
       measurement_point.get<0>() + max_dist, measurement_point.get<1>() + max_dist));
-  rtree_.query(
-    boost::geometry::index::within(query_box), std::back_inserter(nearby_trackers));
+  rtree_.query(boost::geometry::index::within(query_box), std::back_inserter(nearby_trackers));
 
   // Compute measurement polar footprint
   const auto meas_fp =
@@ -231,8 +231,8 @@ void PolarAssociation::processMeasurement(
     const double az_iou = polar_scoring::azimuthIoU(meas_fp.azimuth, tracker_fp.azimuth);
 
     // Gate 3: Radial compatibility
-    const double rad_compat =
-      polar_scoring::radialCompatibility(meas_fp.r_min, meas_fp.r_max, tracker_fp.r_min, tracker_fp.r_max);
+    const double rad_compat = polar_scoring::radialCompatibility(
+      meas_fp.r_min, meas_fp.r_max, tracker_fp.r_min, tracker_fp.r_max);
 
     // Gate 4: Height compatibility
     const double h_iou =
@@ -313,8 +313,7 @@ types::AssociationData PolarAssociation::calcAssociationData(
     const auto measurement_label = classes::getHighestProbLabel(it->classification);
 
     processMeasurement(
-      *it, measurement_idx, measurement_label, prep_data, ego_x, ego_y, ego_yaw,
-      association_data);
+      *it, measurement_idx, measurement_label, prep_data, ego_x, ego_y, ego_yaw, association_data);
   }
 
   return association_data;
