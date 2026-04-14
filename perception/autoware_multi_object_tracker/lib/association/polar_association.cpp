@@ -236,16 +236,14 @@ void PolarAssociation::processMeasurement(
 
     // Gate 1: Radial distance – skip if the range intervals are farther apart than 3 m
     const double radial_gap = std::max(
-      0.0,
-      std::max(meas_fp.r_min, tracker_fp.r_min) - std::min(meas_fp.r_max, tracker_fp.r_max));
+      0.0, std::max(meas_fp.r_min, tracker_fp.r_min) - std::min(meas_fp.r_max, tracker_fp.r_max));
     if (radial_gap > RADIAL_GAP_THRESHOLD) continue;
 
     // Gate 2: Azimuth IoU (primary matching criterion)
     const double az_iou = polar_scoring::azimuthIoU(meas_fp.azimuth, tracker_fp.azimuth);
 
     // Gate 3: Radial compatibility
-    const double rad_compat =
-      polar_scoring::radialCompatibility(meas_fp.r_min, tracker_fp.r_min);
+    const double rad_compat = polar_scoring::radialCompatibility(meas_fp.r_min, tracker_fp.r_min);
 
     // Gate 4: Height compatibility
     const double h_iou =
