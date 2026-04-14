@@ -26,11 +26,7 @@
 
 #include <geometry_msgs/msg/pose.hpp>
 
-#include <boost/geometry.hpp>
-#include <boost/geometry/geometries/box.hpp>
-#include <boost/geometry/geometries/point.hpp>
-#include <boost/geometry/index/rtree.hpp>
-
+#include <array>
 #include <list>
 #include <memory>
 #include <optional>
@@ -39,16 +35,6 @@
 
 namespace autoware::multi_object_tracker
 {
-
-// Spatial index types for R-tree tracker lookup (same as BevAssociation)
-namespace polar_detail
-{
-namespace bg = boost::geometry;
-namespace bgi = boost::geometry::index;
-typedef bg::model::point<double, 2, bg::cs::cartesian> Point;
-typedef bg::model::box<Point> Box;
-typedef std::pair<Point, size_t> ValueType;
-}  // namespace polar_detail
 
 /// Polar-coordinate association algorithm.
 /// Converts measurement and tracker bounding boxes to polar coordinates centered at the ego
@@ -59,6 +45,9 @@ typedef std::pair<Point, size_t> ValueType;
 class PolarAssociation : public AssociationBase
 {
 public:
+  // Number of azimuth bins (15° each, full circle)
+  static constexpr int kNumAzimuthBins = 24;
+
   explicit PolarAssociation(const AssociatorConfig & config);
   ~PolarAssociation() override = default;
 
@@ -89,13 +78,8 @@ private:
   std::shared_ptr<autoware_utils_debug::TimeKeeper> time_keeper_;
   std::optional<geometry_msgs::msg::Pose> ego_pose_;
 
-  // R-tree for spatial indexing of trackers
-  boost::geometry::index::rtree<polar_detail::ValueType, boost::geometry::index::quadratic<16>>
-    rtree_;
-  // Maximum squared search distance per measurement class
-  AssociatorConfig::LabelDoubleMap max_squared_dist_per_class_;
-
-  void updateMaxSearchDistances();
+  // Azimuth bin index: kNumAzimuthBins bins × 15° each, each bin holds tracker indices
+  std::array<std::vector<size_t>, kNumAzimuthBins> azimuth_bins_;
 
   PolarPreparationData prepareAssociationData(
     const types::DynamicObjectList & measurements,

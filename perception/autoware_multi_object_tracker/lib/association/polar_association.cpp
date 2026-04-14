@@ -47,6 +47,57 @@ constexpr double W_HEIGHT = 0.1;
 // Shape change detection thresholds (same semantics as BEV)
 constexpr double AZIMUTH_IOU_SHAPE_CHECK_THRESHOLD = 0.7;
 constexpr double AREA_RATIO_THRESHOLD = 1.3;
+
+// Azimuth bin helpers
+// 24 bins × 15° (π/12 rad) each, covering the full [0, 2π) circle.
+constexpr double kAzimuthBinWidth =
+  2.0 * M_PI / static_cast<double>(PolarAssociation::kNumAzimuthBins);
+
+/// Map any angle to a bin index in [0, kNumAzimuthBins).
+int azimuthToBin(double angle)
+{
+  // Shift from [-π, π) to [0, 2π) then divide by bin width.
+  double a = std::fmod(angle + M_PI, 2.0 * M_PI);
+  if (a < 0.0) a += 2.0 * M_PI;
+  const int bin = static_cast<int>(a / kAzimuthBinWidth);
+  return std::min(bin, PolarAssociation::kNumAzimuthBins - 1);
+}
+
+/// Register tracker_idx to every bin that the azimuth interval covers.
+void registerToAzimuthBins(
+  std::array<std::vector<size_t>, PolarAssociation::kNumAzimuthBins> & bins,
+  const polar_scoring::AzimuthInterval & azimuth, const size_t tracker_idx)
+{
+  // Number of bins the interval spans (always at least 1, capped at all bins).
+  const int n = std::min(
+    static_cast<int>(std::ceil(2.0 * azimuth.half_span / kAzimuthBinWidth)) + 1,
+    PolarAssociation::kNumAzimuthBins);
+  const int start_bin = azimuthToBin(azimuth.center - azimuth.half_span);
+  for (int i = 0; i < n; ++i) {
+    bins[(start_bin + i) % PolarAssociation::kNumAzimuthBins].push_back(tracker_idx);
+  }
+}
+
+/// Collect unique tracker indices from all bins covered by the azimuth interval.
+std::vector<size_t> queryAzimuthBins(
+  const std::array<std::vector<size_t>, PolarAssociation::kNumAzimuthBins> & bins,
+  const polar_scoring::AzimuthInterval & azimuth)
+{
+  const int n = std::min(
+    static_cast<int>(std::ceil(2.0 * azimuth.half_span / kAzimuthBinWidth)) + 1,
+    PolarAssociation::kNumAzimuthBins);
+  const int start_bin = azimuthToBin(azimuth.center - azimuth.half_span);
+
+  std::vector<size_t> candidates;
+  for (int i = 0; i < n; ++i) {
+    const auto & bin_vec = bins[(start_bin + i) % PolarAssociation::kNumAzimuthBins];
+    candidates.insert(candidates.end(), bin_vec.begin(), bin_vec.end());
+  }
+  std::sort(candidates.begin(), candidates.end());
+  candidates.erase(std::unique(candidates.begin(), candidates.end()), candidates.end());
+  return candidates;
+}
+
 }  // namespace
 
 using autoware_utils_debug::ScopedTimeTrack;
@@ -57,7 +108,6 @@ PolarAssociation::PolarAssociation(const AssociatorConfig & config)
 : config_(config), score_threshold_(0.01)
 {
   gnn_solver_ptr_ = std::make_unique<gnn_solver::MuSSP>();
-  updateMaxSearchDistances();
 }
 
 void PolarAssociation::setEgoPose(const std::optional<geometry_msgs::msg::Pose> & ego_pose)
@@ -69,23 +119,6 @@ void PolarAssociation::setTimeKeeper(
   std::shared_ptr<autoware_utils_debug::TimeKeeper> time_keeper_ptr)
 {
   time_keeper_ = std::move(time_keeper_ptr);
-}
-
-void PolarAssociation::updateMaxSearchDistances()
-{
-  max_squared_dist_per_class_.clear();
-  for (const auto measurement_label : classes::trackedLabels()) {
-    double max_squared_dist = 0.0;
-    const auto tracker_params_map_opt =
-      get_map_value_if_exists(config_.association_params_map, measurement_label);
-    if (!tracker_params_map_opt) continue;
-    const auto & tracker_params_map = tracker_params_map_opt->get();
-    for (const auto & [tracker_type, association_params] : tracker_params_map) {
-      static_cast<void>(tracker_type);
-      max_squared_dist = std::max(max_squared_dist, association_params.max_dist_sq);
-    }
-    max_squared_dist_per_class_.insert_or_assign(measurement_label, max_squared_dist);
-  }
 }
 
 // -- Top-level associate --
@@ -115,30 +148,26 @@ PolarAssociation::PolarPreparationData PolarAssociation::prepareAssociationData(
   prep_data.tracker_types.reserve(num_trackers);
   prep_data.tracker_footprints.reserve(num_trackers);
 
-  // Extract tracked objects and build R-tree spatial index
+  // Extract tracked objects and build azimuth bin index
   {
     size_t tracker_idx = 0;
-    std::vector<polar_detail::ValueType> rtree_points;
-    rtree_.clear();
-    rtree_points.reserve(num_trackers);
+    for (auto & bin : azimuth_bins_) bin.clear();
 
     for (const auto & tracker : trackers) {
       types::DynamicObject tracked_object;
       tracker->getTrackedObject(measurements.header.stamp, tracked_object);
 
-      polar_detail::Point p(tracked_object.pose.position.x, tracked_object.pose.position.y);
-      rtree_points.emplace_back(p, tracker_idx);
-
-      // Compute polar footprint for this tracker
+      // Compute polar footprint and register to all azimuth bins it covers
       prep_data.tracker_footprints.emplace_back(
         polar_scoring::computePolarFootprint(tracked_object, ego_x, ego_y, ego_yaw));
+      registerToAzimuthBins(
+        azimuth_bins_, prep_data.tracker_footprints.back().azimuth, tracker_idx);
 
       prep_data.tracked_objects.emplace_back(std::move(tracked_object));
       prep_data.tracker_labels.emplace_back(tracker->getHighestProbLabel());
       prep_data.tracker_types.emplace_back(tracker->getTrackerType());
       ++tracker_idx;
     }
-    rtree_.insert(rtree_points.begin(), rtree_points.end());
   }
 
   // Compute occlusion-based visibility ratios
@@ -183,31 +212,12 @@ void PolarAssociation::processMeasurement(
   if (!tracker_params_map_opt) return;
   const auto & tracker_params_map = tracker_params_map_opt->get();
 
-  const auto max_squared_dist_opt =
-    get_map_value_if_exists(max_squared_dist_per_class_, measurement_label);
-  const double max_squared_dist = max_squared_dist_opt ? max_squared_dist_opt->get() : 0.0;
-
-  // R-tree query: find nearby trackers
-  polar_detail::Point measurement_point(
-    measurement_object.pose.position.x, measurement_object.pose.position.y);
-
-  std::vector<polar_detail::ValueType> nearby_trackers;
-  nearby_trackers.reserve(std::min(size_t{100}, prep_data.tracked_objects.size()));
-
-  const double max_dist = std::sqrt(max_squared_dist);
-  const polar_detail::Box query_box(
-    polar_detail::Point(
-      measurement_point.get<0>() - max_dist, measurement_point.get<1>() - max_dist),
-    polar_detail::Point(
-      measurement_point.get<0>() + max_dist, measurement_point.get<1>() + max_dist));
-  rtree_.query(boost::geometry::index::within(query_box), std::back_inserter(nearby_trackers));
-
-  // Compute measurement polar footprint
+  // Compute measurement polar footprint and query azimuth bins for candidate trackers
   const auto meas_fp =
     polar_scoring::computePolarFootprint(measurement_object, ego_x, ego_y, ego_yaw);
+  const auto candidate_indices = queryAzimuthBins(azimuth_bins_, meas_fp.azimuth);
 
-  for (const auto & tracker_value : nearby_trackers) {
-    const size_t tracker_idx = tracker_value.second;
+  for (const size_t tracker_idx : candidate_indices) {
     const auto tracker_type = prep_data.tracker_types[tracker_idx];
 
     const auto association_params_opt = get_map_value_if_exists(tracker_params_map, tracker_type);
@@ -218,23 +228,17 @@ void PolarAssociation::processMeasurement(
     const auto & tracker_fp = prep_data.tracker_footprints[tracker_idx];
     const double visibility = prep_data.visibility_ratios[tracker_idx];
 
-    // Gate 1: Euclidean distance (same as BEV)
-    const double dx = measurement_object.pose.position.x - tracked_object.pose.position.x;
-    const double dy = measurement_object.pose.position.y - tracked_object.pose.position.y;
-    const double dist_sq = dx * dx + dy * dy;
-    if (dist_sq > association_params.max_dist_sq) continue;
-
     // Skip fully occluded trackers
     if (visibility <= 0.0) continue;
 
-    // Gate 2: Azimuth IoU (primary matching criterion)
+    // Gate 1: Azimuth IoU (primary matching criterion)
     const double az_iou = polar_scoring::azimuthIoU(meas_fp.azimuth, tracker_fp.azimuth);
 
-    // Gate 3: Radial compatibility
+    // Gate 2: Radial compatibility
     const double rad_compat = polar_scoring::radialCompatibility(
       meas_fp.r_min, meas_fp.r_max, tracker_fp.r_min, tracker_fp.r_max);
 
-    // Gate 4: Height compatibility
+    // Gate 3: Height compatibility
     const double h_iou =
       polar_scoring::heightIoU(meas_fp.z_min, meas_fp.z_max, tracker_fp.z_min, tracker_fp.z_max);
 
