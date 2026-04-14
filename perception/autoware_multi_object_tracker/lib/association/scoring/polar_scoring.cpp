@@ -97,13 +97,12 @@ double azimuthIoU(const AzimuthInterval & a, const AzimuthInterval & b)
   return std::min(1.0, intersection / union_span);
 }
 
-double radialCompatibility(
-  const double r_min_a, const double r_max_a, const double r_min_b, const double r_max_b)
+double radialCompatibility(const double r_min_a, const double r_min_b)
 {
-  const double overlap = std::max(0.0, std::min(r_max_a, r_max_b) - std::max(r_min_a, r_min_b));
-  const double span = std::max(r_max_a, r_max_b) - std::min(r_min_a, r_min_b);
-  if (span < MIN_SPAN) return 0.0;
-  return std::min(1.0, overlap / span);
+  const double front_gap = std::abs(r_min_a - r_min_b);
+  const double r_rep = std::max(MIN_RANGE, (r_min_a + r_min_b) * 0.5);
+  const double norm_gap = front_gap / r_rep;
+  return std::exp(-norm_gap);
 }
 
 double heightIoU(

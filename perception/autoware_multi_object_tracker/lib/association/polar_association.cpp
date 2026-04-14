@@ -244,8 +244,8 @@ void PolarAssociation::processMeasurement(
     const double az_iou = polar_scoring::azimuthIoU(meas_fp.azimuth, tracker_fp.azimuth);
 
     // Gate 3: Radial compatibility
-    const double rad_compat = polar_scoring::radialCompatibility(
-      meas_fp.r_min, meas_fp.r_max, tracker_fp.r_min, tracker_fp.r_max);
+    const double rad_compat =
+      polar_scoring::radialCompatibility(meas_fp.r_min, tracker_fp.r_min);
 
     // Gate 4: Height compatibility
     const double h_iou =

@@ -67,9 +67,9 @@ PolarFootprint computePolarFootprint(
 /// @return value in [0, 1]
 double azimuthIoU(const AzimuthInterval & a, const AzimuthInterval & b);
 
-/// Radial range compatibility.
-/// @return value in [0, 1]: 1 means fully overlapping radial ranges
-double radialCompatibility(double r_min_a, double r_max_a, double r_min_b, double r_max_b);
+/// Radial front-point compatibility.
+/// @return value in [0, 1]
+double radialCompatibility(double r_min_a, double r_min_b);
 
 /// Height (z-axis) IoU.
 /// @return value in [0, 1]
