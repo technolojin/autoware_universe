@@ -40,7 +40,7 @@ constexpr double W_HEIGHT = 0.1;
 
 // Shape-change detection: check triggers when azimuth IoU is low but areas differ a lot
 constexpr double AZIMUTH_IOU_SHAPE_CHECK_THRESHOLD = 0.7;
-constexpr double AREA_RATIO_THRESHOLD = 1.3;
+constexpr double AREA_RATIO_THRESHOLD = 2.0;
 }  // namespace
 
 PolarFootprint computePolarFootprint(
@@ -148,7 +148,9 @@ double calculatePolarScore(
   const double score = (raw_score - min_iou) / (1.0 - min_iou);
 
   // Shape change detection for vehicle trackers
-  if (az_iou < AZIMUTH_IOU_SHAPE_CHECK_THRESHOLD && isVehicleTrackerType(tracker_type)) {
+  if (
+    az_iou < AZIMUTH_IOU_SHAPE_CHECK_THRESHOLD && isVehicleTrackerType(tracker_type) &&
+    measurement_object.trust_extension) {
     const double area_meas = measurement_object.area;
     const double area_trk = tracked_object.area;
     if (area_meas > 0.0 && area_trk > 0.0) {
