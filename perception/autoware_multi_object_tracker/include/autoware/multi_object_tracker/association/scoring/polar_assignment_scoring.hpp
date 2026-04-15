@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#ifndef AUTOWARE__MULTI_OBJECT_TRACKER__ASSOCIATION__SCORING__POLAR_SCORING_HPP_
-#define AUTOWARE__MULTI_OBJECT_TRACKER__ASSOCIATION__SCORING__POLAR_SCORING_HPP_
+#ifndef AUTOWARE__MULTI_OBJECT_TRACKER__ASSOCIATION__SCORING__POLAR_ASSIGNMENT_SCORING_HPP_
+#define AUTOWARE__MULTI_OBJECT_TRACKER__ASSOCIATION__SCORING__POLAR_ASSIGNMENT_SCORING_HPP_
 
 #include "autoware/multi_object_tracker/types.hpp"
 
@@ -75,11 +75,11 @@ double radialCompatibility(double r_min_a, double r_min_b);
 double heightIoU(double z_min_a, double z_max_a, double z_min_b, double z_max_b);
 
 /// Compute a combined [0, 1] polar assignment score.
-/// Mirrors calculateAssignmentScore() from assignment_scoring for BEV.
+/// Mirrors calculateBevAssignmentScore() for polar coordinates.
 /// Returns 0.0 when the pair fails the min_iou gate.
 /// Sets has_significant_shape_change when the pair is a vehicle tracker and their areas
 /// differ noticeably despite a low azimuth IoU.
-double calculatePolarScore(
+double calculatePolarAssignmentScore(
   const PolarFootprint & meas_fp, const PolarFootprint & tracker_fp,
   const types::DynamicObject & measurement_object, const types::DynamicObject & tracked_object,
   types::TrackerType tracker_type, double min_iou, bool & has_significant_shape_change);
@@ -87,4 +87,4 @@ double calculatePolarScore(
 }  // namespace polar_scoring
 }  // namespace autoware::multi_object_tracker
 
-#endif  // AUTOWARE__MULTI_OBJECT_TRACKER__ASSOCIATION__SCORING__POLAR_SCORING_HPP_
+#endif  // AUTOWARE__MULTI_OBJECT_TRACKER__ASSOCIATION__SCORING__POLAR_ASSIGNMENT_SCORING_HPP_

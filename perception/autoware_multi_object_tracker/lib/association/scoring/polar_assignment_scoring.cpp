@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "autoware/multi_object_tracker/association/scoring/polar_scoring.hpp"
+#include "autoware/multi_object_tracker/association/scoring/polar_assignment_scoring.hpp"
 
 #include "autoware/multi_object_tracker/object_model/shapes.hpp"
 
@@ -130,7 +130,7 @@ double heightIoU(
   return std::min(1.0, overlap / span);
 }
 
-double calculatePolarScore(
+double calculatePolarAssignmentScore(
   const PolarFootprint & meas_fp, const PolarFootprint & tracker_fp,
   const types::DynamicObject & measurement_object, const types::DynamicObject & tracked_object,
   const types::TrackerType tracker_type, const double min_iou, bool & has_significant_shape_change)

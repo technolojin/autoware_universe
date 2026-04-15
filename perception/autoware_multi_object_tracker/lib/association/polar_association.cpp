@@ -14,7 +14,7 @@
 
 #include "autoware/multi_object_tracker/association/polar_association.hpp"
 
-#include "autoware/multi_object_tracker/association/scoring/polar_scoring.hpp"
+#include "autoware/multi_object_tracker/association/scoring/polar_assignment_scoring.hpp"
 #include "autoware/multi_object_tracker/association/solver/gnn_solver.hpp"
 #include "autoware/multi_object_tracker/types.hpp"
 
@@ -203,7 +203,7 @@ void PolarAssociation::processMeasurement(
     if (near_face_gap > NEAR_FACE_GAP_THRESHOLD) continue;
 
     bool has_significant_shape_change = false;
-    const double score = polar_scoring::calculatePolarScore(
+    const double score = polar_scoring::calculatePolarAssignmentScore(
       meas_fp, tracker_fp, measurement_object, tracked_object, tracker_type,
       association_params.min_iou, has_significant_shape_change);
 
