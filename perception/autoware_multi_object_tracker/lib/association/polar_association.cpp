@@ -48,8 +48,10 @@ constexpr double W_HEIGHT = 0.1;
 constexpr double AZIMUTH_IOU_SHAPE_CHECK_THRESHOLD = 0.7;
 constexpr double AREA_RATIO_THRESHOLD = 1.3;
 
-// Radial distance gate: maximum allowed gap between the two range intervals [m]
-constexpr double RADIAL_GAP_THRESHOLD = 2.0;
+// Near-face gate: maximum allowed gap between the near faces of measurement and tracker [m].
+// Enforces the LiDAR physics constraint that a cluster must originate from the closest visible
+// surface of an object, not from its interior or far side.
+constexpr double NEAR_FACE_GAP_THRESHOLD = 2.0;
 
 // Azimuth bin helpers
 // 24 bins × 15° (π/12 rad) each, covering the full [0, 2π) circle.
@@ -234,10 +236,11 @@ void PolarAssociation::processMeasurement(
     // Skip fully occluded trackers
     if (visibility <= 0.0) continue;
 
-    // Gate 1: Radial distance – skip if the range intervals are farther apart than 3 m
-    const double radial_gap = std::max(
-      0.0, std::max(meas_fp.r_min, tracker_fp.r_min) - std::min(meas_fp.r_max, tracker_fp.r_max));
-    if (radial_gap > RADIAL_GAP_THRESHOLD) continue;
+    // Gate 1: Near-face alignment – the cluster's closest point must be near the tracker's
+    // closest surface. LiDAR can only detect the nearest visible surface of a solid object,
+    // so a cluster floating inside or at the far end of a tracker's bounding box is invalid.
+    const double near_face_gap = std::abs(meas_fp.r_min - tracker_fp.r_min);
+    if (near_face_gap > NEAR_FACE_GAP_THRESHOLD) continue;
 
     // Gate 2: Azimuth IoU (primary matching criterion)
     const double az_iou = polar_scoring::azimuthIoU(meas_fp.azimuth, tracker_fp.azimuth);

@@ -100,9 +100,16 @@ double azimuthIoU(const AzimuthInterval & a, const AzimuthInterval & b)
 double radialCompatibility(const double r_min_a, const double r_min_b)
 {
   const double front_gap = std::abs(r_min_a - r_min_b);
-  const double r_rep = std::max(MIN_RANGE, (r_min_a + r_min_b) * 0.5);
-  const double norm_gap = front_gap / r_rep;
-  return std::exp(-norm_gap);
+  // Use a weakly range-adaptive sigma rather than normalizing by representative range.
+  // Range-normalization makes large near-face gaps look acceptable at distance (e.g. a 14 m
+  // gap at 37 m gives norm_gap=0.38 → score≈0.68 with the old formula).
+  // A fixed base sigma with a small range-proportional term accommodates increasing LiDAR
+  // range noise at distance while correctly penalizing far-side cluster associations.
+  //   sigma = 2.0 + 0.03 * r  →  at 40 m: σ=3.2 m, at 100 m: σ=5.0 m
+  constexpr double SIGMA_BASE = 2.0;   // [m] minimum sigma
+  constexpr double SIGMA_RATE = 0.03;  // [m/m] range-proportional term (3 % of range)
+  const double sigma = SIGMA_BASE + SIGMA_RATE * std::max(r_min_a, r_min_b);
+  return std::exp(-front_gap / sigma);
 }
 
 double heightIoU(
