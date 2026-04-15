@@ -18,7 +18,6 @@
 #include "autoware/multi_object_tracker/types.hpp"
 
 #include <cmath>
-#include <vector>
 
 namespace autoware::multi_object_tracker
 {
@@ -74,6 +73,16 @@ double radialCompatibility(double r_min_a, double r_min_b);
 /// Height (z-axis) IoU.
 /// @return value in [0, 1]
 double heightIoU(double z_min_a, double z_max_a, double z_min_b, double z_max_b);
+
+/// Compute a combined [0, 1] polar assignment score.
+/// Mirrors calculateAssignmentScore() from assignment_scoring for BEV.
+/// Returns 0.0 when the pair fails the min_iou gate.
+/// Sets has_significant_shape_change when the pair is a vehicle tracker and their areas
+/// differ noticeably despite a low azimuth IoU.
+double calculatePolarScore(
+  const PolarFootprint & meas_fp, const PolarFootprint & tracker_fp,
+  const types::DynamicObject & measurement_object, const types::DynamicObject & tracked_object,
+  types::TrackerType tracker_type, double min_iou, bool & has_significant_shape_change);
 
 }  // namespace polar_scoring
 }  // namespace autoware::multi_object_tracker

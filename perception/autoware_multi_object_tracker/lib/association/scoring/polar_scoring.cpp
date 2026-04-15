@@ -32,6 +32,15 @@ namespace
 {
 constexpr double MIN_RANGE = 1.0;  // Minimum range to avoid azimuth instability [m]
 constexpr double MIN_SPAN = 1e-6;  // Minimum span to avoid division by zero
+
+// Scoring weights: azimuth IoU is prioritized over radial and height
+constexpr double W_AZIMUTH = 0.7;
+constexpr double W_RADIAL = 0.2;
+constexpr double W_HEIGHT = 0.1;
+
+// Shape-change detection: check triggers when azimuth IoU is low but areas differ a lot
+constexpr double AZIMUTH_IOU_SHAPE_CHECK_THRESHOLD = 0.7;
+constexpr double AREA_RATIO_THRESHOLD = 1.3;
 }  // namespace
 
 PolarFootprint computePolarFootprint(
@@ -119,6 +128,38 @@ double heightIoU(
   const double span = std::max(z_max_a, z_max_b) - std::min(z_min_a, z_min_b);
   if (span < MIN_SPAN) return 0.0;
   return std::min(1.0, overlap / span);
+}
+
+double calculatePolarScore(
+  const PolarFootprint & meas_fp, const PolarFootprint & tracker_fp,
+  const types::DynamicObject & measurement_object, const types::DynamicObject & tracked_object,
+  const types::TrackerType tracker_type, const double min_iou, bool & has_significant_shape_change)
+{
+  has_significant_shape_change = false;
+
+  const double az_iou = azimuthIoU(meas_fp.azimuth, tracker_fp.azimuth);
+  const double rad_compat = radialCompatibility(meas_fp.r_min, tracker_fp.r_min);
+  const double h_iou = heightIoU(meas_fp.z_min, meas_fp.z_max, tracker_fp.z_min, tracker_fp.z_max);
+
+  const double raw_score = az_iou * (W_AZIMUTH + W_RADIAL * rad_compat + W_HEIGHT * h_iou);
+
+  if (raw_score < min_iou) return 0.0;
+
+  const double score = (raw_score - min_iou) / (1.0 - min_iou);
+
+  // Shape change detection for vehicle trackers
+  if (az_iou < AZIMUTH_IOU_SHAPE_CHECK_THRESHOLD && isVehicleTrackerType(tracker_type)) {
+    const double area_meas = measurement_object.area;
+    const double area_trk = tracked_object.area;
+    if (area_meas > 0.0 && area_trk > 0.0) {
+      const double area_ratio = std::max(area_trk, area_meas) / std::min(area_trk, area_meas);
+      if (area_ratio > AREA_RATIO_THRESHOLD) {
+        has_significant_shape_change = true;
+      }
+    }
+  }
+
+  return score;
 }
 
 }  // namespace polar_scoring

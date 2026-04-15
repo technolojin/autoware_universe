@@ -28,7 +28,6 @@
 #include <iterator>
 #include <list>
 #include <memory>
-#include <numeric>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -38,15 +37,6 @@ namespace autoware::multi_object_tracker
 namespace
 {
 constexpr double INVALID_SCORE = 0.0;
-
-// Scoring weights: azimuth IoU is prioritized over radial and height
-constexpr double W_AZIMUTH = 0.7;
-constexpr double W_RADIAL = 0.2;
-constexpr double W_HEIGHT = 0.1;
-
-// Shape change detection thresholds (same semantics as BEV)
-constexpr double AZIMUTH_IOU_SHAPE_CHECK_THRESHOLD = 0.7;
-constexpr double AREA_RATIO_THRESHOLD = 1.3;
 
 // Near-face gate: maximum allowed gap between the near faces of measurement and tracker [m].
 // Enforces the LiDAR physics constraint that a cluster must originate from the closest visible
@@ -206,43 +196,16 @@ void PolarAssociation::processMeasurement(
     const auto & tracked_object = prep_data.tracked_objects[tracker_idx];
     const auto & tracker_fp = prep_data.tracker_footprints[tracker_idx];
 
-    // Gate 1: Near-face alignment – the cluster's closest point must be near the tracker's
+    // Gate: Near-face alignment – the cluster's closest point must be near the tracker's
     // closest surface. LiDAR can only detect the nearest visible surface of a solid object,
     // so a cluster floating inside or at the far end of a tracker's bounding box is invalid.
     const double near_face_gap = std::abs(meas_fp.r_min - tracker_fp.r_min);
     if (near_face_gap > NEAR_FACE_GAP_THRESHOLD) continue;
 
-    // Gate 2: Azimuth IoU (primary matching criterion)
-    const double az_iou = polar_scoring::azimuthIoU(meas_fp.azimuth, tracker_fp.azimuth);
-
-    // Gate 3: Radial compatibility
-    const double rad_compat = polar_scoring::radialCompatibility(meas_fp.r_min, tracker_fp.r_min);
-
-    // Gate 4: Height compatibility
-    const double h_iou =
-      polar_scoring::heightIoU(meas_fp.z_min, meas_fp.z_max, tracker_fp.z_min, tracker_fp.z_max);
-
-    // Combined score with azimuth prioritized
-    double raw_score = az_iou * (W_AZIMUTH + W_RADIAL * rad_compat + W_HEIGHT * h_iou);
-
-    const double min_iou = association_params.min_iou;
-    if (raw_score < min_iou) continue;
-
-    // Normalize score to [0, 1], same convention as BEV
-    const double score = (raw_score - min_iou) / (1.0 - min_iou);
-
-    // Shape change detection for vehicle trackers
     bool has_significant_shape_change = false;
-    if (az_iou < AZIMUTH_IOU_SHAPE_CHECK_THRESHOLD && isVehicleTrackerType(tracker_type)) {
-      const double area_meas = measurement_object.area;
-      const double area_trk = tracked_object.area;
-      if (area_meas > 0.0 && area_trk > 0.0) {
-        const double area_ratio = std::max(area_trk, area_meas) / std::min(area_trk, area_meas);
-        if (area_ratio > AREA_RATIO_THRESHOLD) {
-          has_significant_shape_change = true;
-        }
-      }
-    }
+    const double score = polar_scoring::calculatePolarScore(
+      meas_fp, tracker_fp, measurement_object, tracked_object, tracker_type,
+      association_params.min_iou, has_significant_shape_change);
 
     if (score > INVALID_SCORE) {
       association_data.entries.emplace_back(
