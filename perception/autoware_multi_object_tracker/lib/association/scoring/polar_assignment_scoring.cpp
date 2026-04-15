@@ -32,15 +32,6 @@ namespace
 {
 constexpr double MIN_RANGE = 1.0;  // Minimum range to avoid azimuth instability [m]
 constexpr double MIN_SPAN = 1e-6;  // Minimum span to avoid division by zero
-
-// Scoring weights: azimuth IoU is prioritized over radial and height
-constexpr double W_AZIMUTH = 0.7;
-constexpr double W_RADIAL = 0.2;
-constexpr double W_HEIGHT = 0.1;
-
-// Shape-change detection: check triggers when azimuth IoU is low but areas differ a lot
-constexpr double AZIMUTH_IOU_SHAPE_CHECK_THRESHOLD = 0.7;
-constexpr double AREA_RATIO_THRESHOLD = 2.0;
 }  // namespace
 
 PolarFootprint computePolarFootprint(
