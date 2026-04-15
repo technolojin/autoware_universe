@@ -75,10 +75,6 @@ double radialCompatibility(double r_min_a, double r_min_b);
 /// @return value in [0, 1]
 double heightIoU(double z_min_a, double z_max_a, double z_min_b, double z_max_b);
 
-/// Fraction of the target interval that is NOT occluded by the occluder.
-/// @return value in [0, 1]: 1.0 = fully visible, 0.0 = fully occluded
-double visibleFraction(const AzimuthInterval & target, const AzimuthInterval & occluder);
-
 }  // namespace polar_scoring
 }  // namespace autoware::multi_object_tracker
 

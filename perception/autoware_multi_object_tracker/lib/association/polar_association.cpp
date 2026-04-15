@@ -175,32 +175,6 @@ PolarAssociation::PolarPreparationData PolarAssociation::prepareAssociationData(
     }
   }
 
-  // Compute occlusion-based visibility ratios
-  // Sort trackers by minimum range (nearest first)
-  std::vector<size_t> range_sorted_indices(num_trackers);
-  std::iota(range_sorted_indices.begin(), range_sorted_indices.end(), 0);
-  std::sort(range_sorted_indices.begin(), range_sorted_indices.end(), [&](size_t a, size_t b) {
-    return prep_data.tracker_footprints[a].r_min < prep_data.tracker_footprints[b].r_min;
-  });
-
-  prep_data.visibility_ratios.assign(num_trackers, 1.0);
-  for (size_t i = 0; i < range_sorted_indices.size(); ++i) {
-    const size_t target_idx = range_sorted_indices[i];
-    const auto & target_fp = prep_data.tracker_footprints[target_idx];
-    double visible = 1.0;
-
-    // Check all closer trackers for occlusion
-    for (size_t j = 0; j < i; ++j) {
-      const size_t occluder_idx = range_sorted_indices[j];
-      const auto & occluder_fp = prep_data.tracker_footprints[occluder_idx];
-      // Only consider occlusion if the occluder is strictly in front
-      if (occluder_fp.r_max < target_fp.r_min) {
-        visible *= polar_scoring::visibleFraction(target_fp.azimuth, occluder_fp.azimuth);
-      }
-    }
-    prep_data.visibility_ratios[target_idx] = visible;
-  }
-
   return prep_data;
 }
 
@@ -231,10 +205,6 @@ void PolarAssociation::processMeasurement(
 
     const auto & tracked_object = prep_data.tracked_objects[tracker_idx];
     const auto & tracker_fp = prep_data.tracker_footprints[tracker_idx];
-    const double visibility = prep_data.visibility_ratios[tracker_idx];
-
-    // Skip fully occluded trackers
-    if (visibility <= 0.0) continue;
 
     // Gate 1: Near-face alignment – the cluster's closest point must be near the tracker's
     // closest surface. LiDAR can only detect the nearest visible surface of a solid object,
@@ -254,11 +224,6 @@ void PolarAssociation::processMeasurement(
 
     // Combined score with azimuth prioritized
     double raw_score = az_iou * (W_AZIMUTH + W_RADIAL * rad_compat + W_HEIGHT * h_iou);
-
-    // Adjust score for partial occlusion: boost score to compensate for reduced visible area
-    if (visibility < 1.0) {
-      raw_score = std::min(raw_score / visibility, 1.0);
-    }
 
     const double min_iou = association_params.min_iou;
     if (raw_score < min_iou) continue;

@@ -121,19 +121,5 @@ double heightIoU(
   return std::min(1.0, overlap / span);
 }
 
-double visibleFraction(const AzimuthInterval & target, const AzimuthInterval & occluder)
-{
-  if (target.half_span < MIN_SPAN) return 0.0;
-
-  const double d = std::abs(normalizeAngle(target.center - occluder.center));
-
-  // Compute the overlap between target and occluder in local coords
-  const double left = std::max(-target.half_span, d - occluder.half_span);
-  const double right = std::min(target.half_span, d + occluder.half_span);
-  const double occluded = std::max(0.0, right - left);
-
-  return 1.0 - occluded / (2.0 * target.half_span);
-}
-
 }  // namespace polar_scoring
 }  // namespace autoware::multi_object_tracker

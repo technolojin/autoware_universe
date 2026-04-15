@@ -69,7 +69,6 @@ private:
     std::vector<classes::Label> tracker_labels;
     std::vector<types::TrackerType> tracker_types;
     std::vector<polar_scoring::PolarFootprint> tracker_footprints;
-    std::vector<double> visibility_ratios;  // per-tracker [0,1] after occlusion
   };
 
   AssociatorConfig config_;
