@@ -45,7 +45,6 @@ namespace autoware::multi_object_tracker
 class PolarAssociation : public AssociationBase
 {
 public:
-
   explicit PolarAssociation(const AssociatorConfig & config);
   ~PolarAssociation() override = default;
 

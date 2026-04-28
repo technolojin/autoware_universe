@@ -37,7 +37,7 @@ struct AzimuthBinEntry
 class AzimuthBinIndex
 {
 public:
-  static constexpr int kNumBins = 24;                           // 15° per bin, full 360°
+  static constexpr int kNumBins = 24;                         // 15° per bin, full 360°
   static constexpr double kBinWidth = 2.0 * M_PI / kNumBins;  // [rad]
 
   void clear()
@@ -47,11 +47,10 @@ public:
 
   /// Register @p tracker_idx to every bin its @p interval covers.
   /// The +1 guard ensures boundary trackers are always findable by find().
-  void add(
-    const polar_scoring::AzimuthInterval & interval, size_t tracker_idx, double r_min)
+  void add(const polar_scoring::AzimuthInterval & interval, size_t tracker_idx, double r_min)
   {
-    const int n = std::min(
-      static_cast<int>(std::ceil(2.0 * interval.half_span / kBinWidth)) + 1, kNumBins);
+    const int n =
+      std::min(static_cast<int>(std::ceil(2.0 * interval.half_span / kBinWidth)) + 1, kNumBins);
     const int start = angleToBin(interval.center - interval.half_span);
     const AzimuthBinEntry entry{tracker_idx, static_cast<float>(r_min)};
     for (int i = 0; i < n; ++i) {
@@ -65,8 +64,7 @@ public:
     const polar_scoring::AzimuthInterval & interval, double r_min_query) const
   {
     // Exact bin count — no +1, relying on add()'s guard for boundary coverage.
-    const int n =
-      std::max(1, static_cast<int>(std::ceil(2.0 * interval.half_span / kBinWidth)));
+    const int n = std::max(1, static_cast<int>(std::ceil(2.0 * interval.half_span / kBinWidth)));
     const int start = angleToBin(interval.center - interval.half_span);
 
     std::vector<size_t> candidates;
