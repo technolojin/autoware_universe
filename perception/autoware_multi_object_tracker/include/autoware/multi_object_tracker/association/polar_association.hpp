@@ -16,6 +16,7 @@
 #define AUTOWARE__MULTI_OBJECT_TRACKER__ASSOCIATION__POLAR_ASSOCIATION_HPP_
 
 #include "autoware/multi_object_tracker/association/association_base.hpp"
+#include "autoware/multi_object_tracker/association/azimuth_bin_index.hpp"
 #include "autoware/multi_object_tracker/association/scoring/polar_assignment_scoring.hpp"
 #include "autoware/multi_object_tracker/association/solver/gnn_solver.hpp"
 #include "autoware/multi_object_tracker/configurations.hpp"
@@ -26,7 +27,6 @@
 
 #include <geometry_msgs/msg/pose.hpp>
 
-#include <array>
 #include <list>
 #include <memory>
 #include <optional>
@@ -45,8 +45,6 @@ namespace autoware::multi_object_tracker
 class PolarAssociation : public AssociationBase
 {
 public:
-  // Number of azimuth bins (15° each, full circle)
-  static constexpr int kNumAzimuthBins = 24;
 
   explicit PolarAssociation(const AssociatorConfig & config);
   ~PolarAssociation() override = default;
@@ -77,8 +75,7 @@ private:
   std::shared_ptr<autoware_utils_debug::TimeKeeper> time_keeper_;
   std::optional<geometry_msgs::msg::Pose> ego_pose_;
 
-  // Azimuth bin index: kNumAzimuthBins bins × 15° each, each bin holds tracker indices
-  std::array<std::vector<size_t>, kNumAzimuthBins> azimuth_bins_;
+  AzimuthBinIndex azimuth_bin_index_;
 
   PolarPreparationData prepareAssociationData(
     const types::DynamicObjectList & measurements,

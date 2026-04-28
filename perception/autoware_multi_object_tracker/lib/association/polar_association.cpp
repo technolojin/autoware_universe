@@ -23,7 +23,6 @@
 
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 
-#include <algorithm>
 #include <cmath>
 #include <iterator>
 #include <list>
@@ -42,56 +41,6 @@ constexpr double INVALID_SCORE = 0.0;
 // Enforces the LiDAR physics constraint that a cluster must originate from the closest visible
 // surface of an object, not from its interior or far side.
 constexpr double NEAR_FACE_GAP_THRESHOLD = 2.0;
-
-// Azimuth bin helpers
-// 24 bins × 15° (π/12 rad) each, covering the full [0, 2π) circle.
-constexpr double kAzimuthBinWidth =
-  2.0 * M_PI / static_cast<double>(PolarAssociation::kNumAzimuthBins);
-
-/// Map any angle to a bin index in [0, kNumAzimuthBins).
-int azimuthToBin(double angle)
-{
-  // Shift from [-π, π) to [0, 2π) then divide by bin width.
-  double a = std::fmod(angle + M_PI, 2.0 * M_PI);
-  if (a < 0.0) a += 2.0 * M_PI;
-  const int bin = static_cast<int>(a / kAzimuthBinWidth);
-  return std::min(bin, PolarAssociation::kNumAzimuthBins - 1);
-}
-
-/// Register tracker_idx to every bin that the azimuth interval covers.
-void registerToAzimuthBins(
-  std::array<std::vector<size_t>, PolarAssociation::kNumAzimuthBins> & bins,
-  const polar_scoring::AzimuthInterval & azimuth, const size_t tracker_idx)
-{
-  // Number of bins the interval spans (always at least 1, capped at all bins).
-  const int n = std::min(
-    static_cast<int>(std::ceil(2.0 * azimuth.half_span / kAzimuthBinWidth)) + 1,
-    PolarAssociation::kNumAzimuthBins);
-  const int start_bin = azimuthToBin(azimuth.center - azimuth.half_span);
-  for (int i = 0; i < n; ++i) {
-    bins[(start_bin + i) % PolarAssociation::kNumAzimuthBins].push_back(tracker_idx);
-  }
-}
-
-/// Collect unique tracker indices from all bins covered by the azimuth interval.
-std::vector<size_t> queryAzimuthBins(
-  const std::array<std::vector<size_t>, PolarAssociation::kNumAzimuthBins> & bins,
-  const polar_scoring::AzimuthInterval & azimuth)
-{
-  const int n = std::min(
-    static_cast<int>(std::ceil(2.0 * azimuth.half_span / kAzimuthBinWidth)) + 1,
-    PolarAssociation::kNumAzimuthBins);
-  const int start_bin = azimuthToBin(azimuth.center - azimuth.half_span);
-
-  std::vector<size_t> candidates;
-  for (int i = 0; i < n; ++i) {
-    const auto & bin_vec = bins[(start_bin + i) % PolarAssociation::kNumAzimuthBins];
-    candidates.insert(candidates.end(), bin_vec.begin(), bin_vec.end());
-  }
-  std::sort(candidates.begin(), candidates.end());
-  candidates.erase(std::unique(candidates.begin(), candidates.end()), candidates.end());
-  return candidates;
-}
 
 }  // namespace
 
@@ -146,7 +95,7 @@ PolarAssociation::PolarPreparationData PolarAssociation::prepareAssociationData(
   // Extract tracked objects and build azimuth bin index
   {
     size_t tracker_idx = 0;
-    for (auto & bin : azimuth_bins_) bin.clear();
+    azimuth_bin_index_.clear();
 
     for (const auto & tracker : trackers) {
       types::DynamicObject tracked_object;
@@ -155,8 +104,8 @@ PolarAssociation::PolarPreparationData PolarAssociation::prepareAssociationData(
       // Compute polar footprint and register to all azimuth bins it covers
       prep_data.tracker_footprints.emplace_back(
         polar_scoring::computePolarFootprint(tracked_object, ego_x, ego_y, ego_yaw));
-      registerToAzimuthBins(
-        azimuth_bins_, prep_data.tracker_footprints.back().azimuth, tracker_idx);
+      const auto & fp = prep_data.tracker_footprints.back();
+      azimuth_bin_index_.add(fp.azimuth, tracker_idx, fp.r_min);
 
       prep_data.tracked_objects.emplace_back(std::move(tracked_object));
       prep_data.tracker_labels.emplace_back(tracker->getHighestProbLabel());
@@ -184,7 +133,7 @@ void PolarAssociation::processMeasurement(
   // Compute measurement polar footprint and query azimuth bins for candidate trackers
   const auto meas_fp =
     polar_scoring::computePolarFootprint(measurement_object, ego_x, ego_y, ego_yaw);
-  const auto candidate_indices = queryAzimuthBins(azimuth_bins_, meas_fp.azimuth);
+  const auto candidate_indices = azimuth_bin_index_.find(meas_fp.azimuth, meas_fp.r_min);
 
   for (const size_t tracker_idx : candidate_indices) {
     const auto tracker_type = prep_data.tracker_types[tracker_idx];

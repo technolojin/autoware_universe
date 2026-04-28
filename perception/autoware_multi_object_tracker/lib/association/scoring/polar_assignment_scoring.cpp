@@ -53,14 +53,18 @@ PolarFootprint computePolarFootprint(
     return {{azimuth, 0.0}, range, range, z_min, z_max};
   }
 
-  // Compute centroid-based azimuth as the reference center
+  // Centroid direction used as the reference from which corner offsets are measured.
+  // For partial observations (I-shape, L-shape) the centroid may not be the angular
+  // midpoint of the visible polygon, so we recompute the true angular midpoint below.
   const double cx = object.pose.position.x - ego_x;
   const double cy = object.pose.position.y - ego_y;
   const double center_azimuth = normalizeAngle(std::atan2(cy, cx) - ego_yaw);
 
   double r_min = std::numeric_limits<double>::max();
   double r_max = 0.0;
-  double max_offset = 0.0;
+  // Signed angular offsets from center_azimuth tracked independently.
+  double az_lo = std::numeric_limits<double>::max();
+  double az_hi = std::numeric_limits<double>::lowest();
 
   for (const auto & pt : points) {
     const double dx = pt.x() - ego_x;
@@ -69,17 +73,27 @@ PolarFootprint computePolarFootprint(
     r_min = std::min(r_min, range);
     r_max = std::max(r_max, range);
 
-    // Skip corners too close to ego for stable azimuth computation
-    if (range < MIN_RANGE) continue;
+    // Skip only truly degenerate corners (corner at ego position).
+    if (range < 1e-6) continue;
 
     const double azimuth = normalizeAngle(std::atan2(dy, dx) - ego_yaw);
-    const double offset = std::abs(normalizeAngle(azimuth - center_azimuth));
-    max_offset = std::max(max_offset, offset);
+    const double offset = normalizeAngle(azimuth - center_azimuth);  // signed
+    az_lo = std::min(az_lo, offset);
+    az_hi = std::max(az_hi, offset);
   }
 
   r_min = std::max(r_min, MIN_RANGE);
 
-  return {{center_azimuth, max_offset}, r_min, r_max, z_min, z_max};
+  if (az_lo > az_hi) {
+    // All corners were at the ego position — degenerate polygon.
+    return {{center_azimuth, 0.0}, r_min, r_max, z_min, z_max};
+  }
+
+  // Angular midpoint of the visible span, corrected from the centroid's azimuth.
+  const double corrected_center = normalizeAngle(center_azimuth + (az_lo + az_hi) / 2.0);
+  const double half_span = (az_hi - az_lo) / 2.0;
+
+  return {{corrected_center, half_span}, r_min, r_max, z_min, z_max};
 }
 
 double azimuthIoU(const AzimuthInterval & a, const AzimuthInterval & b)
