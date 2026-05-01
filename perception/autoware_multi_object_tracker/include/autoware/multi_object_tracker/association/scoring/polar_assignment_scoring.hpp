@@ -38,11 +38,11 @@ struct AzimuthInterval
 struct PolarFootprint
 {
   AzimuthInterval azimuth;
-  double r_min;      // minimum 2D XY range from ego [m]
-  double r_max;      // maximum 2D XY range from ego [m]
-  double r_min_3d;   // minimum 3D Euclidean distance to nearest box corner [m]
-  double z_min;      // minimum height [m]
-  double z_max;      // maximum height [m]
+  double r_min;     // minimum 2D XY range from ego [m]
+  double r_max;     // maximum 2D XY range from ego [m]
+  double r_min_3d;  // minimum 3D Euclidean distance to nearest box corner [m]
+  double z_min;     // minimum height [m]
+  double z_max;     // maximum height [m]
 };
 
 /// Normalize angle to (-pi, pi].

@@ -153,12 +153,13 @@ double calculatePolarAssignmentScore(
 
   // 2D perspective IoU in (azimuth [rad] × height [m]) space.
   const double az_inter = azimuthIntersectionSpan(meas_fp.azimuth, tracker_fp.azimuth);
-  const double h_inter =
-    std::max(0.0, std::min(meas_fp.z_max, tracker_fp.z_max) - std::max(meas_fp.z_min, tracker_fp.z_min));
+  const double h_inter = std::max(
+    0.0, std::min(meas_fp.z_max, tracker_fp.z_max) - std::max(meas_fp.z_min, tracker_fp.z_min));
 
   const double inter_area = az_inter * h_inter;
   const double area_meas_fp = 2.0 * meas_fp.azimuth.half_span * (meas_fp.z_max - meas_fp.z_min);
-  const double area_trk_fp = 2.0 * tracker_fp.azimuth.half_span * (tracker_fp.z_max - tracker_fp.z_min);
+  const double area_trk_fp =
+    2.0 * tracker_fp.azimuth.half_span * (tracker_fp.z_max - tracker_fp.z_min);
   const double union_area = area_meas_fp + area_trk_fp - inter_area;
 
   const double perspective_iou = (union_area > MIN_SPAN) ? inter_area / union_area : 0.0;
