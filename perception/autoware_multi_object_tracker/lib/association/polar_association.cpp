@@ -46,7 +46,7 @@ constexpr double NEAR_FACE_GAP_THRESHOLD = 2.0;
 
 using autoware_utils_debug::ScopedTimeTrack;
 
-// -- Construction & configuration --
+//// Construction & configuration
 
 PolarAssociation::PolarAssociation(const AssociatorConfig & config)
 : config_(config), score_threshold_(0.01)
@@ -65,7 +65,7 @@ void PolarAssociation::setTimeKeeper(
   time_keeper_ = std::move(time_keeper_ptr);
 }
 
-// -- Top-level associate --
+//// Top-level associate
 
 types::AssociationResult PolarAssociation::associate(
   const types::DynamicObjectList & measurements,
@@ -77,7 +77,7 @@ types::AssociationResult PolarAssociation::associate(
   return result;
 }
 
-// -- Data preparation --
+//// Data preparation
 
 PolarAssociation::PolarPreparationData PolarAssociation::prepareAssociationData(
   const types::DynamicObjectList & measurements,
@@ -117,7 +117,7 @@ PolarAssociation::PolarPreparationData PolarAssociation::prepareAssociationData(
   return prep_data;
 }
 
-// -- Per-measurement scoring --
+//// Per-measurement scoring
 
 void PolarAssociation::processMeasurement(
   const types::DynamicObject & measurement_object, const size_t measurement_idx,
@@ -163,7 +163,7 @@ void PolarAssociation::processMeasurement(
   }
 }
 
-// -- Full association data computation --
+//// Full association data computation
 
 types::AssociationData PolarAssociation::calcAssociationData(
   const types::DynamicObjectList & measurements,
@@ -210,7 +210,7 @@ types::AssociationData PolarAssociation::calcAssociationData(
   return association_data;
 }
 
-// -- Assignment (GNN solver) --
+//// Assignment (GNN solver)
 
 void PolarAssociation::assign(
   const types::AssociationData & data, types::AssociationResult & association_result)
