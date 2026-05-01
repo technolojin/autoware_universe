@@ -32,10 +32,48 @@ namespace
 {
 constexpr double MIN_RANGE = 1.0;  // Minimum range to avoid azimuth instability [m]
 constexpr double MIN_SPAN = 1e-6;  // Minimum span to avoid division by zero
+
+// Returns the azimuth intersection span [rad] between two azimuth intervals.
+double azimuthIntersectionSpan(const AzimuthInterval & a, const AzimuthInterval & b)
+{
+  const double d = std::abs(normalizeAngle(a.center - b.center));
+  const double left = std::max(-a.half_span, d - b.half_span);
+  const double right = std::min(a.half_span, d + b.half_span);
+  return std::max(0.0, right - left);
+}
+
+// Returns the minimum 3D Euclidean distance from ego to any corner of the object's bounding box.
+// Iterates all (2D polygon corners) × (z_min, z_max) to cover all 3D box corners.
+double computeClosestCorner3d(
+  const types::DynamicObject & object, const double ego_x, const double ego_y, const double ego_z)
+{
+  const auto polygon = autoware_utils_geometry::to_polygon2d(object.pose, object.shape);
+  const auto & pts = polygon.outer();
+  const auto [z_min, z_max] = shapes::getObjectZRange(object);
+
+  if (pts.size() < 2) {
+    const double dx = object.pose.position.x - ego_x;
+    const double dy = object.pose.position.y - ego_y;
+    const double dz = object.pose.position.z - ego_z;
+    return std::max(MIN_RANGE, std::sqrt(dx * dx + dy * dy + dz * dz));
+  }
+
+  double r_min_3d = std::numeric_limits<double>::max();
+  for (const auto & pt : pts) {
+    const double dx = pt.x() - ego_x;
+    const double dy = pt.y() - ego_y;
+    for (const double cz : {z_min, z_max}) {
+      const double dz = cz - ego_z;
+      r_min_3d = std::min(r_min_3d, std::sqrt(dx * dx + dy * dy + dz * dz));
+    }
+  }
+  return std::max(r_min_3d, MIN_RANGE);
+}
 }  // namespace
 
 PolarFootprint computePolarFootprint(
-  const types::DynamicObject & object, const double ego_x, const double ego_y, const double ego_yaw)
+  const types::DynamicObject & object, const double ego_x, const double ego_y, const double ego_z,
+  const double ego_yaw)
 {
   // Get the 2D polygon corners in map frame
   const auto polygon = autoware_utils_geometry::to_polygon2d(object.pose, object.shape);
@@ -44,13 +82,15 @@ PolarFootprint computePolarFootprint(
   // Height range from object shape
   const auto [z_min, z_max] = shapes::getObjectZRange(object);
 
+  const double r_min_3d = computeClosestCorner3d(object, ego_x, ego_y, ego_z);
+
   if (points.size() < 2) {
     // Degenerate polygon: use object center as a single point
     const double dx = object.pose.position.x - ego_x;
     const double dy = object.pose.position.y - ego_y;
     const double range = std::max(MIN_RANGE, std::sqrt(dx * dx + dy * dy));
     const double azimuth = normalizeAngle(std::atan2(dy, dx) - ego_yaw);
-    return {{azimuth, 0.0}, range, range, z_min, z_max};
+    return {{azimuth, 0.0}, range, range, r_min_3d, z_min, z_max};
   }
 
   // Centroid direction used as the reference from which corner offsets are measured.
@@ -86,53 +126,22 @@ PolarFootprint computePolarFootprint(
 
   if (az_lo > az_hi) {
     // All corners were at the ego position — degenerate polygon.
-    return {{center_azimuth, 0.0}, r_min, r_max, z_min, z_max};
+    return {{center_azimuth, 0.0}, r_min, r_max, r_min_3d, z_min, z_max};
   }
 
   // Angular midpoint of the visible span, corrected from the centroid's azimuth.
   const double corrected_center = normalizeAngle(center_azimuth + (az_lo + az_hi) / 2.0);
   const double half_span = (az_hi - az_lo) / 2.0;
 
-  return {{corrected_center, half_span}, r_min, r_max, z_min, z_max};
+  return {{corrected_center, half_span}, r_min, r_max, r_min_3d, z_min, z_max};
 }
 
 double azimuthIoU(const AzimuthInterval & a, const AzimuthInterval & b)
 {
-  // Angular distance between centers, handling wrapping
-  const double d = std::abs(normalizeAngle(a.center - b.center));
-
-  // In local coordinates: A = [-h_A, h_A], B = [d - h_B, d + h_B]
-  const double left = std::max(-a.half_span, d - b.half_span);
-  const double right = std::min(a.half_span, d + b.half_span);
-  const double intersection = std::max(0.0, right - left);
+  const double intersection = azimuthIntersectionSpan(a, b);
   const double union_span = 2.0 * a.half_span + 2.0 * b.half_span - intersection;
-
   if (union_span < MIN_SPAN) return 0.0;
   return std::min(1.0, intersection / union_span);
-}
-
-double radialCompatibility(const double r_min_a, const double r_min_b)
-{
-  const double front_gap = std::abs(r_min_a - r_min_b);
-  // Use a weakly range-adaptive sigma rather than normalizing by representative range.
-  // Range-normalization makes large near-face gaps look acceptable at distance (e.g. a 14 m
-  // gap at 37 m gives norm_gap=0.38 → score≈0.68 with the old formula).
-  // A fixed base sigma with a small range-proportional term accommodates increasing LiDAR
-  // range noise at distance while correctly penalizing far-side cluster associations.
-  //   sigma = 2.0 + 0.03 * r  →  at 40 m: σ=3.2 m, at 100 m: σ=5.0 m
-  constexpr double SIGMA_BASE = 2.0;   // [m] minimum sigma
-  constexpr double SIGMA_RATE = 0.03;  // [m/m] range-proportional term (3 % of range)
-  const double sigma = SIGMA_BASE + SIGMA_RATE * std::max(r_min_a, r_min_b);
-  return std::exp(-front_gap / sigma);
-}
-
-double heightIoU(
-  const double z_min_a, const double z_max_a, const double z_min_b, const double z_max_b)
-{
-  const double overlap = std::max(0.0, std::min(z_max_a, z_max_b) - std::max(z_min_a, z_min_b));
-  const double span = std::max(z_max_a, z_max_b) - std::min(z_min_a, z_min_b);
-  if (span < MIN_SPAN) return 0.0;
-  return std::min(1.0, overlap / span);
 }
 
 double calculatePolarAssignmentScore(
@@ -142,19 +151,25 @@ double calculatePolarAssignmentScore(
 {
   has_significant_shape_change = false;
 
-  const double az_iou = azimuthIoU(meas_fp.azimuth, tracker_fp.azimuth);
-  const double rad_compat = radialCompatibility(meas_fp.r_min, tracker_fp.r_min);
-  const double h_iou = heightIoU(meas_fp.z_min, meas_fp.z_max, tracker_fp.z_min, tracker_fp.z_max);
+  // 2D perspective IoU in (azimuth [rad] × height [m]) space.
+  const double az_inter = azimuthIntersectionSpan(meas_fp.azimuth, tracker_fp.azimuth);
+  const double h_inter =
+    std::max(0.0, std::min(meas_fp.z_max, tracker_fp.z_max) - std::max(meas_fp.z_min, tracker_fp.z_min));
 
-  const double raw_score = az_iou * (W_AZIMUTH + W_RADIAL * rad_compat + W_HEIGHT * h_iou);
+  const double inter_area = az_inter * h_inter;
+  const double area_meas_fp = 2.0 * meas_fp.azimuth.half_span * (meas_fp.z_max - meas_fp.z_min);
+  const double area_trk_fp = 2.0 * tracker_fp.azimuth.half_span * (tracker_fp.z_max - tracker_fp.z_min);
+  const double union_area = area_meas_fp + area_trk_fp - inter_area;
 
-  if (raw_score < min_iou) return 0.0;
+  const double perspective_iou = (union_area > MIN_SPAN) ? inter_area / union_area : 0.0;
 
-  const double score = (raw_score - min_iou) / (1.0 - min_iou);
+  if (perspective_iou < min_iou) return 0.0;
+
+  const double score = (perspective_iou - min_iou) / (1.0 - min_iou);
 
   // Shape change detection for vehicle trackers
   if (
-    az_iou < AZIMUTH_IOU_SHAPE_CHECK_THRESHOLD && isVehicleTrackerType(tracker_type) &&
+    perspective_iou < PERSPECTIVE_IOU_SHAPE_CHECK_THRESHOLD && isVehicleTrackerType(tracker_type) &&
     measurement_object.trust_extension) {
     const double area_meas = measurement_object.area;
     const double area_trk = tracked_object.area;

@@ -76,13 +76,13 @@ private:
 
   PolarPreparationData prepareAssociationData(
     const types::DynamicObjectList & measurements,
-    const std::list<std::shared_ptr<Tracker>> & trackers, double ego_x, double ego_y,
+    const std::list<std::shared_ptr<Tracker>> & trackers, double ego_x, double ego_y, double ego_z,
     double ego_yaw);
 
   void processMeasurement(
     const types::DynamicObject & measurement_object, size_t measurement_idx,
     classes::Label measurement_label, const PolarPreparationData & prep_data, double ego_x,
-    double ego_y, double ego_yaw, types::AssociationData & association_data);
+    double ego_y, double ego_z, double ego_yaw, types::AssociationData & association_data);
 
   types::AssociationData calcAssociationData(
     const types::DynamicObjectList & measurements,

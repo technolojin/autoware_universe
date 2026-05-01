@@ -38,56 +38,44 @@ struct AzimuthInterval
 struct PolarFootprint
 {
   AzimuthInterval azimuth;
-  double r_min;  // minimum range from ego [m]
-  double r_max;  // maximum range from ego [m]
-  double z_min;  // minimum height [m]
-  double z_max;  // maximum height [m]
+  double r_min;      // minimum 2D XY range from ego [m]
+  double r_max;      // maximum 2D XY range from ego [m]
+  double r_min_3d;   // minimum 3D Euclidean distance to nearest box corner [m]
+  double z_min;      // minimum height [m]
+  double z_max;      // maximum height [m]
 };
 
-/// Normalize angle to [-pi, pi].
+/// Normalize angle to (-pi, pi].
 inline double normalizeAngle(double angle)
 {
-  while (angle > M_PI) angle -= 2.0 * M_PI;
-  while (angle < -M_PI) angle += 2.0 * M_PI;
-  return angle;
+  return std::remainder(angle, 2.0 * M_PI);
 }
 
-// Azimuth IoU threshold below which the shape-change check is activated for vehicle trackers
-constexpr double AZIMUTH_IOU_SHAPE_CHECK_THRESHOLD = 0.7;
+// Perspective IoU threshold below which the shape-change check is activated for vehicle trackers
+constexpr double PERSPECTIVE_IOU_SHAPE_CHECK_THRESHOLD = 0.7;
 // Area ratio above which the shape change is considered significant
 constexpr double AREA_RATIO_THRESHOLD = 2.0;
-// Scoring weights: azimuth IoU is prioritized over radial and height
-constexpr double W_AZIMUTH = 0.7;
-constexpr double W_RADIAL = 0.2;
-constexpr double W_HEIGHT = 0.1;
 
 /// Compute polar footprint of an object relative to ego position and heading.
 /// Object pose and shape are in the map frame; the result is in ego-centric polar coordinates.
 /// @param object  Dynamic object with pose and shape in map frame
 /// @param ego_x   Ego position x in map frame [m]
 /// @param ego_y   Ego position y in map frame [m]
+/// @param ego_z   Ego position z in map frame [m]
 /// @param ego_yaw Ego heading in map frame [rad]
 PolarFootprint computePolarFootprint(
-  const types::DynamicObject & object, double ego_x, double ego_y, double ego_yaw);
+  const types::DynamicObject & object, double ego_x, double ego_y, double ego_z, double ego_yaw);
 
 /// 1D IoU of two azimuth intervals.
 /// Uses the center+half_span representation to handle angle wrapping naturally.
 /// @return value in [0, 1]
 double azimuthIoU(const AzimuthInterval & a, const AzimuthInterval & b);
 
-/// Radial front-point compatibility.
-/// @return value in [0, 1]
-double radialCompatibility(double r_min_a, double r_min_b);
-
-/// Height (z-axis) IoU.
-/// @return value in [0, 1]
-double heightIoU(double z_min_a, double z_max_a, double z_min_b, double z_max_b);
-
 /// Compute a combined [0, 1] polar assignment score.
-/// Mirrors calculateBevAssignmentScore() for polar coordinates.
+/// Uses 2D perspective IoU in (azimuth [rad] × height [m]) space.
 /// Returns 0.0 when the pair fails the min_iou gate.
 /// Sets has_significant_shape_change when the pair is a vehicle tracker and their areas
-/// differ noticeably despite a low azimuth IoU.
+/// differ noticeably despite a low perspective IoU.
 double calculatePolarAssignmentScore(
   const PolarFootprint & meas_fp, const PolarFootprint & tracker_fp,
   const types::DynamicObject & measurement_object, const types::DynamicObject & tracked_object,

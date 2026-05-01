@@ -37,10 +37,10 @@ namespace
 {
 constexpr double INVALID_SCORE = 0.0;
 
-// Near-face gate: maximum allowed gap between the near faces of measurement and tracker [m].
+// Depth gate: maximum allowed gap between the closest 3D corners of measurement and tracker [m].
 // Enforces the LiDAR physics constraint that a cluster must originate from the closest visible
 // surface of an object, not from its interior or far side.
-constexpr double NEAR_FACE_GAP_THRESHOLD = 2.0;
+constexpr double DEPTH_GATE_THRESHOLD = 2.0;
 
 }  // namespace
 
@@ -82,7 +82,7 @@ types::AssociationResult PolarAssociation::associate(
 PolarAssociation::PolarPreparationData PolarAssociation::prepareAssociationData(
   const types::DynamicObjectList & measurements,
   const std::list<std::shared_ptr<Tracker>> & trackers, const double ego_x, const double ego_y,
-  const double ego_yaw)
+  const double ego_z, const double ego_yaw)
 {
   PolarPreparationData prep_data;
   const size_t num_trackers = trackers.size();
@@ -103,7 +103,7 @@ PolarAssociation::PolarPreparationData PolarAssociation::prepareAssociationData(
 
       // Compute polar footprint and register to all azimuth bins it covers
       prep_data.tracker_footprints.emplace_back(
-        polar_scoring::computePolarFootprint(tracked_object, ego_x, ego_y, ego_yaw));
+        polar_scoring::computePolarFootprint(tracked_object, ego_x, ego_y, ego_z, ego_yaw));
       const auto & fp = prep_data.tracker_footprints.back();
       azimuth_bin_index_.add(fp.azimuth, tracker_idx, fp.r_min);
 
@@ -122,7 +122,7 @@ PolarAssociation::PolarPreparationData PolarAssociation::prepareAssociationData(
 void PolarAssociation::processMeasurement(
   const types::DynamicObject & measurement_object, const size_t measurement_idx,
   const classes::Label measurement_label, const PolarPreparationData & prep_data,
-  const double ego_x, const double ego_y, const double ego_yaw,
+  const double ego_x, const double ego_y, const double ego_z, const double ego_yaw,
   types::AssociationData & association_data)
 {
   const auto tracker_params_map_opt =
@@ -132,7 +132,7 @@ void PolarAssociation::processMeasurement(
 
   // Compute measurement polar footprint and query azimuth bins for candidate trackers
   const auto meas_fp =
-    polar_scoring::computePolarFootprint(measurement_object, ego_x, ego_y, ego_yaw);
+    polar_scoring::computePolarFootprint(measurement_object, ego_x, ego_y, ego_z, ego_yaw);
   const auto candidate_indices = azimuth_bin_index_.find(meas_fp.azimuth, meas_fp.r_min);
 
   for (const size_t tracker_idx : candidate_indices) {
@@ -145,11 +145,11 @@ void PolarAssociation::processMeasurement(
     const auto & tracked_object = prep_data.tracked_objects[tracker_idx];
     const auto & tracker_fp = prep_data.tracker_footprints[tracker_idx];
 
-    // Gate: Near-face alignment – the cluster's closest point must be near the tracker's
-    // closest surface. LiDAR can only detect the nearest visible surface of a solid object,
-    // so a cluster floating inside or at the far end of a tracker's bounding box is invalid.
-    const double near_face_gap = std::abs(meas_fp.r_min - tracker_fp.r_min);
-    if (near_face_gap > NEAR_FACE_GAP_THRESHOLD) continue;
+    // Depth gate: the cluster's closest 3D corner must be near the tracker's closest 3D corner.
+    // LiDAR can only detect the nearest visible surface of a solid object, so a cluster at the
+    // far side or interior of a tracker's bounding box is physically impossible.
+    const double depth_gap = std::abs(meas_fp.r_min_3d - tracker_fp.r_min_3d);
+    if (depth_gap > DEPTH_GATE_THRESHOLD) continue;
 
     bool has_significant_shape_change = false;
     const double score = polar_scoring::calculatePolarAssignmentScore(
@@ -184,9 +184,10 @@ types::AssociationData PolarAssociation::calcAssociationData(
 
   const double ego_x = ego_pose_->position.x;
   const double ego_y = ego_pose_->position.y;
+  const double ego_z = ego_pose_->position.z;
   const double ego_yaw = tf2::getYaw(ego_pose_->orientation);
 
-  auto prep_data = prepareAssociationData(measurements, trackers, ego_x, ego_y, ego_yaw);
+  auto prep_data = prepareAssociationData(measurements, trackers, ego_x, ego_y, ego_z, ego_yaw);
 
   types::AssociationData association_data;
   association_data.tracker_uuids.reserve(trackers.size());
@@ -204,7 +205,8 @@ types::AssociationData PolarAssociation::calcAssociationData(
     const auto measurement_label = classes::getHighestProbLabel(it->classification);
 
     processMeasurement(
-      *it, measurement_idx, measurement_label, prep_data, ego_x, ego_y, ego_yaw, association_data);
+      *it, measurement_idx, measurement_label, prep_data, ego_x, ego_y, ego_z, ego_yaw,
+      association_data);
   }
 
   return association_data;
