@@ -78,8 +78,13 @@ public:
     return !channel_info.trust_extension;
   }
 
+  // Vehicle length is managed by the bicycle motion model; the shape filter must not overwrite it
+  // with partial detections (even from trusted bbox channels), so always use conditioned update
+  // when has_significant_shape_change fires.
+  bool useShapeFilter() const override { return false; }
+
   const double ALIGNMENT_RATIO_THRESHOLD = 0.09;    // 9% of length as alignment tolerance
-  const double ALIGNMENT_ABSOLUTE_THRESHOLD = 2.0;  // [m] minimum tolerance for large vehicles
+  const double ALIGNMENT_ABSOLUTE_THRESHOLD = 3.0;  // [m] minimum tolerance for large vehicles
   UpdateStrategy determineUpdateStrategy(
     const types::DynamicObject & measurement, const types::DynamicObject & prediction) const;
 

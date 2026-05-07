@@ -57,9 +57,9 @@ constexpr double PERSPECTIVE_IOU_SHAPE_CHECK_THRESHOLD = 0.7;
 // Area ratio above which the shape change is considered significant
 constexpr double AREA_RATIO_THRESHOLD = 2.0;
 // Scale [m] for graded closest-point proximity in vehicle tracker scoring
-constexpr double DEPTH_PROXIMITY_SCALE = 2.0;
+constexpr double DEPTH_PROXIMITY_SCALE = 3.0;
 // Weight of closest-point proximity in the combined score for vehicle trackers
-constexpr double DEPTH_PROXIMITY_WEIGHT = 0.3;
+constexpr double DEPTH_PROXIMITY_WEIGHT = 0.02;
 
 /// Compute polar footprint of an object relative to ego position and heading.
 /// Object pose and shape are in the map frame; the result is in ego-centric polar coordinates.

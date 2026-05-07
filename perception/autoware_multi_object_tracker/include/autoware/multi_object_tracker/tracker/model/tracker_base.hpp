@@ -202,6 +202,11 @@ protected:
     return false;
   }
 
+  // Returns true when this tracker should use the unstable shape filter (extension update path).
+  // VehicleTracker overrides this to return false because its length is managed by the bicycle
+  // motion model and partial detections (even from trusted bbox channels) must not overwrite it.
+  virtual bool useShapeFilter() const { return true; }
+
 public:
   virtual bool getTrackedObject(
     const rclcpp::Time & time, types::DynamicObject & object,

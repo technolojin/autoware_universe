@@ -31,6 +31,7 @@
 #include <bits/stdc++.h>
 
 #include <algorithm>
+#include <limits>
 
 namespace autoware::multi_object_tracker
 {
@@ -136,14 +137,27 @@ bool VehicleTracker::predict(const rclcpp::Time & time)
 bool VehicleTracker::measureWithPose(
   const types::DynamicObject & object, const types::InputChannel & channel_info)
 {
-  // get measurement yaw angle to update
-  bool is_yaw_available =
+  // Shape update is only valid when the channel guarantees reliable size information
+  // AND the measurement is a bounding box.
+  // - Polygon (UNKNOWN-label cluster): shape.type != BOUNDING_BOX, dims = (0,0)
+  // - Known-label cluster converted to bbox: trust_extension=false (baselink-frame bbox,
+  // unreliable)
+  const bool is_bbox = (object.shape.type == autoware_perception_msgs::msg::Shape::BOUNDING_BOX);
+  const bool can_update_shape = channel_info.trust_extension && is_bbox;
+
+  // Use the measurement length only when its shape is trustworthy.
+  // Untrusted inputs (polygon or trust_extension=false) have unreliable or zero dimensions;
+  // using them would corrupt the EKF wheel-position states and gradually shrink tracked length.
+  constexpr double min_length = 1.0;
+  const double length = can_update_shape ? std::max(object.shape.dimensions.x, min_length)
+                                         : std::max(motion_model_.getLength(), min_length);
+
+  const bool is_yaw_available =
     object.kinematics.orientation_availability != types::OrientationAvailability::UNAVAILABLE &&
     channel_info.trust_orientation;
+  const bool is_velocity_available = object.kinematics.has_twist;
 
-  bool is_velocity_available = object.kinematics.has_twist;
-
-  // update
+  // Update kinematics via EKF
   bool is_updated = false;
   {
     const double & x = object.pose.position.x;
@@ -151,24 +165,17 @@ bool VehicleTracker::measureWithPose(
     const double & yaw = tf2::getYaw(object.pose.orientation);
     const double & vel_x = object.twist.linear.x;
     const double & vel_y = object.twist.linear.y;
-    constexpr double min_length = 1.0;  // minimum length to avoid division by zero
-    const double length = std::max(object.shape.dimensions.x, min_length);
 
     if (is_yaw_available && is_velocity_available) {
-      // update with yaw angle and velocity
       is_updated = motion_model_.updateStatePoseHeadVel(
         x, y, yaw, object.pose_covariance, vel_x, vel_y, object.twist_covariance, length);
     } else if (is_yaw_available && !is_velocity_available) {
-      // update with yaw angle, but without velocity
       is_updated = motion_model_.updateStatePoseHead(x, y, yaw, object.pose_covariance, length);
     } else if (!is_yaw_available && is_velocity_available) {
-      // update without yaw angle, but with velocity
       is_updated = motion_model_.updateStatePoseVel(
         x, y, object.pose_covariance, yaw, vel_x, vel_y, object.twist_covariance, length);
     } else {
-      // update without yaw angle and velocity
-      is_updated = motion_model_.updateStatePose(
-        x, y, object.pose_covariance, length);  // update without yaw angle and velocity
+      is_updated = motion_model_.updateStatePose(x, y, object.pose_covariance, length);
     }
     motion_model_.limitStates();
   }
@@ -180,8 +187,7 @@ bool VehicleTracker::measureWithPose(
       (1.0 - gain) * object_.pose.position.z + gain * object.pose.position.z;
   }
 
-  if (object.shape.type != autoware_perception_msgs::msg::Shape::BOUNDING_BOX) {
-    // do not update shape if the input is not a bounding box
+  if (!can_update_shape) {
     return false;
   }
 
@@ -206,10 +212,7 @@ bool VehicleTracker::measureWithPose(
     object_extension.z = gain_inv * object_extension.z + gain * object.shape.dimensions.z;
   }
 
-  // set maximum and minimum size
   limitObjectExtension(object_model_);
-
-  // set shape type, which is bounding box
   object_.shape.type = autoware_perception_msgs::msg::Shape::BOUNDING_BOX;
   object_.area = types::getArea(object.shape);
 

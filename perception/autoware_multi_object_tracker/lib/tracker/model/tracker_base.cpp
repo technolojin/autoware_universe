@@ -203,19 +203,31 @@ bool Tracker::updateWithMeasurement(
   // Update strategies:
   // 1. Normal update: Update position and shape by Kalman filter
   // 2. Extension update: Apply the new stable shape and update position
-  // 3. Conditioned update: Ignore the noisy shape info and partially update position with below 3
-  // conditions
+  // 3. Conditioned update: Ignore the noisy shape info and partially update position
   //    - FRONT_WHEEL_UPDATE: Update anchor point of front wheel
   //    - REAR_WHEEL_UPDATE: Update anchor point of rear wheel
   //    - WEAK_UPDATE: Update tending to predicted position
   //
-  // Cluster measurements (trust_extension=false) from vehicle trackers always bypass the normal
-  // update path and go directly to conditioned update, because their bounding box orientation is
-  // unreliable (baselink frame) and only edge/anchor-based update is physically accurate.
+  // Shape update rule (enforced both here and inside measureWithPose):
+  //   Shape is updated only when trust_extension=true AND measurement is BOUNDING_BOX.
+  //   - Polygon cluster (UNKNOWN label, not converted): shape.type=POLYGON, dims=(0,0)
+  //   - Known-label cluster converted to bbox: trust_extension=false (baselink-frame, unreliable)
+  //   Both cases skip shape update and preserve the tracked length in the EKF.
+  //
+  // VehicleTracker additionally overrides preferConditionedUpdate to route trust_extension=false
+  // measurements to the edge-aligned conditioned update instead of the normal path.
   const bool force_conditioned = preferConditionedUpdate(channel_info);
 
+  // Shape filter is only applicable when the measurement carries reliable size information:
+  // trust_extension=true (channel guarantees size) AND shape is a bounding box.
+  const bool shape_filter_enabled =
+    useShapeFilter() && channel_info.trust_extension &&
+    (object.shape.type == autoware_perception_msgs::msg::Shape::BOUNDING_BOX);
+
   if (!has_significant_shape_change && !force_conditioned) {
-    unstable_shape_filter_.processNormalMeasurement(object);
+    if (shape_filter_enabled) {
+      unstable_shape_filter_.processNormalMeasurement(object);
+    }
     // 1. Normal update
     measure(object, measurement_time, channel_info);
     object_.trust_extension = object.trust_extension;
@@ -228,8 +240,11 @@ bool Tracker::updateWithMeasurement(
     conditionedUpdate(object, predicted_object, tracker_shape, measurement_time, channel_info);
 
   } else {
-    unstable_shape_filter_.processNoisyMeasurement(object);
-    if (unstable_shape_filter_.isStable()) {
+    if (shape_filter_enabled) {
+      unstable_shape_filter_.processNoisyMeasurement(object);
+    }
+
+    if (shape_filter_enabled && unstable_shape_filter_.isStable()) {
       // 2. Extension update
       autoware_perception_msgs::msg::Shape smoothed_shape = unstable_shape_filter_.getShape();
 
@@ -243,7 +258,7 @@ bool Tracker::updateWithMeasurement(
       unstable_shape_filter_.clear();
 
     } else {
-      // 3. Conditioned update
+      // 3. Conditioned update (filter not stable, partial detection, or tracker disables filter)
       const auto tracker_shape = object_.shape;
 
       types::DynamicObject predicted_object;
