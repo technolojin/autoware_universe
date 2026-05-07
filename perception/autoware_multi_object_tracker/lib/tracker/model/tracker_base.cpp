@@ -233,6 +233,16 @@ bool Tracker::updateWithMeasurement(
     return ss.str();
   };
 
+  // Derive a compact tracker-type label by stripping the "_tracker" suffix.
+  const auto trackerTypeStr = [this]() {
+    std::string s = types::toString(getTrackerType());
+    const std::string suffix = "_tracker";
+    if (s.size() > suffix.size() && s.substr(s.size() - suffix.size()) == suffix) {
+      s.resize(s.size() - suffix.size());
+    }
+    return s;
+  }();
+
   if (!has_significant_shape_change && !force_conditioned) {
     if (shape_filter_enabled) {
       unstable_shape_filter_.processNormalMeasurement(object);
@@ -240,8 +250,8 @@ bool Tracker::updateWithMeasurement(
     // 1. Normal update
     RCLCPP_INFO(
       rclcpp::get_logger("Tracker"),
-      "[NORMAL_UPDATE] ch=%d trk=%s det=%s det_t=%.3f det_pos_diff=(%.2f, %.2f)",
-      channel_info.index,
+      "[NORMAL_UPDATE] type=%s ch=%d trk=%s det=%s det_t=%.3f det_pos_diff=(%.2f, %.2f)",
+      trackerTypeStr.c_str(), channel_info.index,
       getUuidString().substr(0, 6).c_str(), shortUuid(object.uuid).c_str(),
       measurement_time.seconds(),
       object.pose.position.x - object_.pose.position.x,
@@ -254,6 +264,14 @@ bool Tracker::updateWithMeasurement(
     const auto tracker_shape = object_.shape;
     types::DynamicObject predicted_object;
     getTrackedObject(measurement_time, predicted_object);
+    RCLCPP_INFO(
+      rclcpp::get_logger("Tracker"),
+      "[CONDITIONED_UPDATE] type=%s ch=%d trk=%s det=%s det_t=%.3f det_pos_diff=(%.2f, %.2f)",
+      trackerTypeStr.c_str(), channel_info.index,
+      getUuidString().substr(0, 6).c_str(), shortUuid(object.uuid).c_str(),
+      measurement_time.seconds(),
+      object.pose.position.x - predicted_object.pose.position.x,
+      object.pose.position.y - predicted_object.pose.position.y);
     conditionedUpdate(object, predicted_object, tracker_shape, measurement_time, channel_info);
 
   } else {
@@ -273,16 +291,14 @@ bool Tracker::updateWithMeasurement(
       object_.trust_extension = smoothed_object.trust_extension;
 
       unstable_shape_filter_.clear();
-      {
-        RCLCPP_INFO(
-          rclcpp::get_logger("Tracker"),
-          "[UNST_SMOOTHED_UPDATE] ch=%d trk=%s det=%s det_t=%.3f det_pos_diff=(%.2f, %.2f)",
-          channel_info.index,
-          getUuidString().substr(0, 6).c_str(), shortUuid(object.uuid).c_str(),
-          measurement_time.seconds(),
-          smoothed_object.pose.position.x - object_.pose.position.x,
-          smoothed_object.pose.position.y - object_.pose.position.y);
-      }
+      RCLCPP_INFO(
+        rclcpp::get_logger("Tracker"),
+        "[UNST_SMOOTHED_UPDATE] type=%s ch=%d trk=%s det=%s det_t=%.3f det_pos_diff=(%.2f, %.2f)",
+        trackerTypeStr.c_str(), channel_info.index,
+        getUuidString().substr(0, 6).c_str(), shortUuid(object.uuid).c_str(),
+        measurement_time.seconds(),
+        smoothed_object.pose.position.x - object_.pose.position.x,
+        smoothed_object.pose.position.y - object_.pose.position.y);
 
     } else {
       // 3. Conditioned update (filter not stable, partial detection, or tracker disables filter)
@@ -293,12 +309,12 @@ bool Tracker::updateWithMeasurement(
 
       RCLCPP_INFO(
         rclcpp::get_logger("Tracker"),
-        "[CONDITIONED_UPDATE] ch=%d trk=%s det=%s det_t=%.3f det_pos_diff=(%.2f, %.2f)",
-        channel_info.index,
+        "[CONDITIONED_UPDATE] type=%s ch=%d trk=%s det=%s det_t=%.3f det_pos_diff=(%.2f, %.2f)",
+        trackerTypeStr.c_str(), channel_info.index,
         getUuidString().substr(0, 6).c_str(), shortUuid(object.uuid).c_str(),
         measurement_time.seconds(),
-        object.pose.position.x - object_.pose.position.x,
-        object.pose.position.y - object_.pose.position.y);
+        object.pose.position.x - predicted_object.pose.position.x,
+        object.pose.position.y - predicted_object.pose.position.y);
       conditionedUpdate(object, predicted_object, tracker_shape, measurement_time, channel_info);
     }
   }
