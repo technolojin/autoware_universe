@@ -78,7 +78,8 @@ public:
     return !channel_info.trust_extension;
   }
 
-  const double ALIGNMENT_RATIO_THRESHOLD = 0.09;  // 9% of length as alignment tolerance
+  const double ALIGNMENT_RATIO_THRESHOLD = 0.09;    // 9% of length as alignment tolerance
+  const double ALIGNMENT_ABSOLUTE_THRESHOLD = 2.0;  // [m] minimum tolerance for large vehicles
   UpdateStrategy determineUpdateStrategy(
     const types::DynamicObject & measurement, const types::DynamicObject & prediction) const;
 
