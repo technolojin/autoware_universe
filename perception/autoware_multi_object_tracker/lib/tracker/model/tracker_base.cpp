@@ -240,9 +240,11 @@ bool Tracker::updateWithMeasurement(
     // 1. Normal update
     RCLCPP_INFO(
       rclcpp::get_logger("Tracker"),
-      "[NORMAL_UPDATE] trk=%s det=%s det_pos_diff=(%.2f, %.2f)",
+      "[NORMAL_UPDATE] ch=%d trk=%s det=%s det_t=%.3f det_pos_diff=(%.2f, %.2f)",
+      channel_info.index,
       getUuidString().substr(0, 6).c_str(), shortUuid(object.uuid).c_str(),
-      object.pose.position.x - object_.pose.position.x, 
+      measurement_time.seconds(),
+      object.pose.position.x - object_.pose.position.x,
       object.pose.position.y - object_.pose.position.y);
     measure(object, measurement_time, channel_info);
     object_.trust_extension = object.trust_extension;
@@ -271,6 +273,16 @@ bool Tracker::updateWithMeasurement(
       object_.trust_extension = smoothed_object.trust_extension;
 
       unstable_shape_filter_.clear();
+      {
+        RCLCPP_INFO(
+          rclcpp::get_logger("Tracker"),
+          "[UNST_SMOOTHED_UPDATE] ch=%d trk=%s det=%s det_t=%.3f det_pos_diff=(%.2f, %.2f)",
+          channel_info.index,
+          getUuidString().substr(0, 6).c_str(), shortUuid(object.uuid).c_str(),
+          measurement_time.seconds(),
+          smoothed_object.pose.position.x - object_.pose.position.x,
+          smoothed_object.pose.position.y - object_.pose.position.y);
+      }
 
     } else {
       // 3. Conditioned update (filter not stable, partial detection, or tracker disables filter)
@@ -281,10 +293,12 @@ bool Tracker::updateWithMeasurement(
 
       RCLCPP_INFO(
         rclcpp::get_logger("Tracker"),
-        "[UNSTABLE_SHAPE] trk=%s det=%s det_pos_diff=(%.2f, %.2f)",
+        "[CONDITIONED_UPDATE] ch=%d trk=%s det=%s det_t=%.3f det_pos_diff=(%.2f, %.2f)",
+        channel_info.index,
         getUuidString().substr(0, 6).c_str(), shortUuid(object.uuid).c_str(),
-        object.pose.position.x-predicted_object.pose.position.x, 
-        object.pose.position.y-predicted_object.pose.position.y);
+        measurement_time.seconds(),
+        object.pose.position.x - object_.pose.position.x,
+        object.pose.position.y - object_.pose.position.y);
       conditionedUpdate(object, predicted_object, tracker_shape, measurement_time, channel_info);
     }
   }

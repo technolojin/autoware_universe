@@ -134,7 +134,7 @@ MeasurementProcessingResult process_measurement(
   const size_t channel_index,
   const autoware_perception_msgs::msg::DetectedObjects::ConstSharedPtr msg,
   const rclcpp::Time & current_time, MultiObjectTrackerInternalState & state,
-  TrackerDebugger & debugger);
+  TrackerDebugger & debugger, const rclcpp::Logger & logger);
 
 void process_objects_(
   const types::ObjectsWithAssociation & objects_with_associations,

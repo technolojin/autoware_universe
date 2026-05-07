@@ -215,7 +215,7 @@ MeasurementProcessingResult process_measurement(
   const size_t channel_index,
   const autoware_perception_msgs::msg::DetectedObjects::ConstSharedPtr msg,
   const rclcpp::Time & current_time, MultiObjectTrackerInternalState & state,
-  TrackerDebugger & debugger)
+  TrackerDebugger & debugger, const rclcpp::Logger & logger)
 {
   MeasurementProcessingResult result;
   result.has_objects = false;
@@ -238,6 +238,14 @@ MeasurementProcessingResult process_measurement(
   const types::AssociatedObjects associated_objects{*objects, association_result};
   debugger.collectObjectInfo(
     measurement_time, state.processor->getListTracker(), associated_objects);
+
+  {
+    // debug message
+    RCLCPP_INFO(
+      logger,
+      "[process_measurement] ch=%zu obj_count=%zu msg_t=%.3f",
+      channel_index, objects->objects.size(), measurement_time.seconds());
+  }
 
   return result;
 }
@@ -294,6 +302,25 @@ ObjectProcessingResult process_objects_batch(
     state.input_manager->getObjects(current_time, objects_with_associations);
   if (!is_objects_ready) {
     return result;
+  }
+
+  // Log timestamp range of the obtained batch
+  {
+    const double t_min = objects_with_associations.front().getTimestamp().seconds();
+    const double t_max = objects_with_associations.back().getTimestamp().seconds();
+    RCLCPP_INFO(
+      logger,
+      "[process_objects_batch] batch_size=%zu t_min=%.3f t_max=%.3f span_ms=%.1f",
+      objects_with_associations.size(), t_min, t_max, (t_max - t_min) * 1e3);
+    
+    for (const auto & objects_data : objects_with_associations) {
+      RCLCPP_INFO(
+        logger,
+        "[process_objects_batch]   ch=%u obj_count=%zu msg_t=%.3f",
+        objects_data.objects.channel_index, 
+        objects_data.objects.objects.size(),
+        objects_data.getTimestamp().seconds());
+    }
   }
 
   // process start - start measurement time before processing

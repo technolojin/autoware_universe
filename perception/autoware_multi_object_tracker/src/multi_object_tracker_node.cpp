@@ -303,7 +303,7 @@ void MultiObjectTracker::onMeasurement(
 
   const rclcpp::Time current_time = this->now();
   const auto result =
-    core::process_measurement(channel_index, msg, current_time, state_, *debugger_);
+    core::process_measurement(channel_index, msg, current_time, state_, *debugger_, get_logger());
 
   if (!result.has_objects) {
     return;
