@@ -53,6 +53,11 @@ public:
   void setOrientationAvailability(
     const types::OrientationAvailability & orientation_availability) override;
   virtual ~MultipleVehicleTracker() {}
+
+  // Vehicle length is managed by the bicycle motion model; the shape filter must not overwrite it
+  // with partial detections (even from trusted bbox channels), so always use conditioned update
+  // when has_significant_shape_change fires.
+  bool useShapeFilter() const override { return false; }
 };
 
 }  // namespace autoware::multi_object_tracker
