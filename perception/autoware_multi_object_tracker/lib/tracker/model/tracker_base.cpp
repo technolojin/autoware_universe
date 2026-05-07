@@ -208,12 +208,24 @@ bool Tracker::updateWithMeasurement(
   //    - FRONT_WHEEL_UPDATE: Update anchor point of front wheel
   //    - REAR_WHEEL_UPDATE: Update anchor point of rear wheel
   //    - WEAK_UPDATE: Update tending to predicted position
+  //
+  // Cluster measurements (trust_extension=false) from vehicle trackers always bypass the normal
+  // update path and go directly to conditioned update, because their bounding box orientation is
+  // unreliable (baselink frame) and only edge/anchor-based update is physically accurate.
+  const bool force_conditioned = preferConditionedUpdate(channel_info);
 
-  if (!has_significant_shape_change) {
+  if (!has_significant_shape_change && !force_conditioned) {
     unstable_shape_filter_.processNormalMeasurement(object);
     // 1. Normal update
     measure(object, measurement_time, channel_info);
     object_.trust_extension = object.trust_extension;
+
+  } else if (force_conditioned) {
+    // 3. Conditioned update — forced by tracker type / channel (e.g. cluster measurement)
+    const auto tracker_shape = object_.shape;
+    types::DynamicObject predicted_object;
+    getTrackedObject(measurement_time, predicted_object);
+    conditionedUpdate(object, predicted_object, tracker_shape, measurement_time, channel_info);
 
   } else {
     unstable_shape_filter_.processNoisyMeasurement(object);

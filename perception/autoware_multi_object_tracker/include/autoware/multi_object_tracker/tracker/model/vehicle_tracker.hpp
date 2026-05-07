@@ -71,6 +71,13 @@ public:
 
   void setObjectShape(const autoware_perception_msgs::msg::Shape & shape) override;
 
+  // Cluster measurements (trust_extension=false) always use conditioned update because their
+  // bounding box orientation is in baselink frame and only edge-based update is accurate.
+  bool preferConditionedUpdate(const types::InputChannel & channel_info) const override
+  {
+    return !channel_info.trust_extension;
+  }
+
   const double ALIGNMENT_RATIO_THRESHOLD = 0.09;  // 9% of length as alignment tolerance
   UpdateStrategy determineUpdateStrategy(
     const types::DynamicObject & measurement, const types::DynamicObject & prediction) const;
@@ -97,6 +104,12 @@ private:
     const EdgePositions & meas_edges, const types::DynamicObject & prediction) const;
   geometry_msgs::msg::Point calculateAnchorPoint(
     const EdgeAlignment & alignment, const types::DynamicObject & measurement) const;
+
+  // Re-project a cluster's polygon footprint onto the tracker's current heading so that
+  // conditionedUpdate receives a correctly-oriented bounding box for edge alignment.
+  // Only called when channel_info.trust_extension == false (cluster measurement).
+  types::DynamicObject alignClusterToTrackerOrientation(
+    const types::DynamicObject & cluster, double tracker_yaw) const;
 };
 
 }  // namespace autoware::multi_object_tracker

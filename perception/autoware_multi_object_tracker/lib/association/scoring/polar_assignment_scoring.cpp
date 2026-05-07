@@ -144,12 +144,12 @@ double azimuthIoU(const AzimuthInterval & a, const AzimuthInterval & b)
   return std::min(1.0, intersection / union_span);
 }
 
-double calculatePolarAssignmentScore(
+ScoringResult calculatePolarAssignmentScore(
   const PolarFootprint & meas_fp, const PolarFootprint & tracker_fp,
   const types::DynamicObject & measurement_object, const types::DynamicObject & tracked_object,
-  const types::TrackerType tracker_type, const double min_iou, bool & has_significant_shape_change)
+  const types::TrackerType tracker_type, const double min_iou)
 {
-  has_significant_shape_change = false;
+  ScoringResult result{0.0, false};
 
   // 2D perspective IoU in (azimuth [rad] × height [m]) space.
   const double az_inter = azimuthIntersectionSpan(meas_fp.azimuth, tracker_fp.azimuth);
@@ -164,25 +164,40 @@ double calculatePolarAssignmentScore(
 
   const double perspective_iou = (union_area > MIN_SPAN) ? inter_area / union_area : 0.0;
 
-  if (perspective_iou < min_iou) return 0.0;
+  if (perspective_iou < min_iou) return result;
 
-  const double score = (perspective_iou - min_iou) / (1.0 - min_iou);
+  const double iou_score = (perspective_iou - min_iou) / (1.0 - min_iou);
 
-  // Shape change detection for vehicle trackers
+  const bool is_vehicle = isVehicleTrackerType(tracker_type);
+
+  // Shape change detection for vehicle trackers with trusted shape measurements
   if (
-    perspective_iou < PERSPECTIVE_IOU_SHAPE_CHECK_THRESHOLD && isVehicleTrackerType(tracker_type) &&
+    perspective_iou < PERSPECTIVE_IOU_SHAPE_CHECK_THRESHOLD && is_vehicle &&
     measurement_object.trust_extension) {
     const double area_meas = measurement_object.area;
     const double area_trk = tracked_object.area;
     if (area_meas > 0.0 && area_trk > 0.0) {
       const double area_ratio = std::max(area_trk, area_meas) / std::min(area_trk, area_meas);
       if (area_ratio > AREA_RATIO_THRESHOLD) {
-        has_significant_shape_change = true;
+        result.has_significant_shape_change = true;
       }
     }
   }
 
-  return score;
+  // For vehicle trackers, blend IoU score with graded closest-point proximity.
+  // This rewards cluster measurements whose nearest visible surface closely matches the
+  // tracker's nearest surface — the primary observable for partial LiDAR returns.
+  if (is_vehicle) {
+    const double depth_diff = std::abs(meas_fp.r_min_3d - tracker_fp.r_min_3d);
+    const double depth_proximity =
+      std::max(0.0, 1.0 - depth_diff / DEPTH_PROXIMITY_SCALE);
+    result.score =
+      iou_score * (1.0 - DEPTH_PROXIMITY_WEIGHT) + depth_proximity * DEPTH_PROXIMITY_WEIGHT;
+  } else {
+    result.score = iou_score;
+  }
+
+  return result;
 }
 
 }  // namespace polar_scoring

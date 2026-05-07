@@ -57,13 +57,19 @@ public:
   void setTimeKeeper(std::shared_ptr<autoware_utils_debug::TimeKeeper> time_keeper_ptr);
 
 private:
+  // Per-tracker entry bundling all precomputed data for one tracker
+  struct TrackerPolarEntry
+  {
+    types::DynamicObject object;
+    classes::Label label;
+    types::TrackerType type;
+    polar_scoring::PolarFootprint footprint;
+  };
+
   // Per-tracker precomputed data for a single association round
   struct PolarPreparationData
   {
-    std::vector<types::DynamicObject> tracked_objects;
-    std::vector<classes::Label> tracker_labels;
-    std::vector<types::TrackerType> tracker_types;
-    std::vector<polar_scoring::PolarFootprint> tracker_footprints;
+    std::vector<TrackerPolarEntry> trackers;
   };
 
   AssociatorConfig config_;

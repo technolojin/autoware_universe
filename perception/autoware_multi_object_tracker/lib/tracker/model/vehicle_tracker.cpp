@@ -310,13 +310,72 @@ bool VehicleTracker::getTrackedObject(
   return true;
 }
 
+types::DynamicObject VehicleTracker::alignClusterToTrackerOrientation(
+  const types::DynamicObject & cluster, const double tracker_yaw) const
+{
+  const auto & pts = cluster.shape.footprint.points;
+  if (pts.empty()) return cluster;
+
+  // footprint.points are in the cluster's local frame (baselink orientation).
+  // Transform each point to a map-relative offset, then project onto the tracker's axes.
+  const double cluster_yaw = tf2::getYaw(cluster.pose.orientation);
+  const double c_cl = std::cos(cluster_yaw);
+  const double s_cl = std::sin(cluster_yaw);
+  const double c_tr = std::cos(tracker_yaw);
+  const double s_tr = std::sin(tracker_yaw);
+
+  double long_min = std::numeric_limits<double>::max();
+  double long_max = std::numeric_limits<double>::lowest();
+  double lat_min = std::numeric_limits<double>::max();
+  double lat_max = std::numeric_limits<double>::lowest();
+
+  for (const auto & pt : pts) {
+    // cluster local → map-relative offset
+    const double mx = pt.x * c_cl - pt.y * s_cl;
+    const double my = pt.x * s_cl + pt.y * c_cl;
+    // project onto tracker heading (longitudinal) and lateral axes
+    const double along = mx * c_tr + my * s_tr;
+    const double lat = -mx * s_tr + my * c_tr;
+    long_min = std::min(long_min, along);
+    long_max = std::max(long_max, along);
+    lat_min = std::min(lat_min, lat);
+    lat_max = std::max(lat_max, lat);
+  }
+
+  const double long_center = (long_min + long_max) * 0.5;
+  const double lat_center = (lat_min + lat_max) * 0.5;
+
+  types::DynamicObject aligned = cluster;
+  aligned.pose.position.x =
+    cluster.pose.position.x + long_center * c_tr - lat_center * s_tr;
+  aligned.pose.position.y =
+    cluster.pose.position.y + long_center * s_tr + lat_center * c_tr;
+
+  tf2::Quaternion q;
+  q.setRPY(0.0, 0.0, tracker_yaw);
+  aligned.pose.orientation = tf2::toMsg(q);
+
+  aligned.shape.dimensions.x = long_max - long_min;
+  aligned.shape.dimensions.y = lat_max - lat_min;
+
+  return aligned;
+}
+
 bool VehicleTracker::conditionedUpdate(
   const types::DynamicObject & measurement, const types::DynamicObject & prediction,
   const autoware_perception_msgs::msg::Shape & tracker_shape, const rclcpp::Time & measurement_time,
   const types::InputChannel & channel_info)
 {
+  // For cluster measurements (trust_extension=false), the bounding box orientation is in baselink
+  // frame. Re-project the polygon footprint onto the tracker's current heading so that
+  // determineUpdateStrategy receives correctly-oriented edge centers.
+  const types::DynamicObject & meas_for_strategy =
+    (!channel_info.trust_extension && !measurement.shape.footprint.points.empty())
+      ? alignClusterToTrackerOrientation(measurement, motion_model_.getYawState())
+      : measurement;
+
   // Determine update strategy
-  UpdateStrategy strategy = determineUpdateStrategy(measurement, prediction);
+  UpdateStrategy strategy = determineUpdateStrategy(meas_for_strategy, prediction);
 
   // Handle weak update strategy (no edge alignment - use weak update with pseudo measurement)
   if (strategy.type == UpdateStrategyType::WEAK_UPDATE) {

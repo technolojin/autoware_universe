@@ -193,6 +193,15 @@ protected:
     const autoware_perception_msgs::msg::Shape & tracker_shape,
     const rclcpp::Time & measurement_time, const types::InputChannel & channel_info);
 
+  // Returns true when a measurement from this channel should always use conditioned update
+  // rather than the normal Kalman measurement update. Vehicle trackers override this to return
+  // true for cluster channels (trust_extension=false) because the cluster's bounding box
+  // orientation is unreliable and edge-based update is more physically accurate.
+  virtual bool preferConditionedUpdate(const types::InputChannel & /*channel_info*/) const
+  {
+    return false;
+  }
+
 public:
   virtual bool getTrackedObject(
     const rclcpp::Time & time, types::DynamicObject & object,

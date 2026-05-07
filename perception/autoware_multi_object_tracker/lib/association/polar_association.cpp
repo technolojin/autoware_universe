@@ -85,33 +85,22 @@ PolarAssociation::PolarPreparationData PolarAssociation::prepareAssociationData(
   const double ego_z, const double ego_yaw)
 {
   PolarPreparationData prep_data;
-  const size_t num_trackers = trackers.size();
+  prep_data.trackers.reserve(trackers.size());
 
-  prep_data.tracked_objects.reserve(num_trackers);
-  prep_data.tracker_labels.reserve(num_trackers);
-  prep_data.tracker_types.reserve(num_trackers);
-  prep_data.tracker_footprints.reserve(num_trackers);
+  size_t tracker_idx = 0;
+  azimuth_bin_index_.clear();
 
-  // Extract tracked objects and build azimuth bin index
-  {
-    size_t tracker_idx = 0;
-    azimuth_bin_index_.clear();
+  for (const auto & tracker : trackers) {
+    TrackerPolarEntry entry;
+    tracker->getTrackedObject(measurements.header.stamp, entry.object);
+    entry.label = tracker->getHighestProbLabel();
+    entry.type = tracker->getTrackerType();
+    entry.footprint =
+      polar_scoring::computePolarFootprint(entry.object, ego_x, ego_y, ego_z, ego_yaw);
 
-    for (const auto & tracker : trackers) {
-      types::DynamicObject tracked_object;
-      tracker->getTrackedObject(measurements.header.stamp, tracked_object);
-
-      // Compute polar footprint and register to all azimuth bins it covers
-      prep_data.tracker_footprints.emplace_back(
-        polar_scoring::computePolarFootprint(tracked_object, ego_x, ego_y, ego_z, ego_yaw));
-      const auto & fp = prep_data.tracker_footprints.back();
-      azimuth_bin_index_.add(fp.azimuth, tracker_idx, fp.r_min);
-
-      prep_data.tracked_objects.emplace_back(std::move(tracked_object));
-      prep_data.tracker_labels.emplace_back(tracker->getHighestProbLabel());
-      prep_data.tracker_types.emplace_back(tracker->getTrackerType());
-      ++tracker_idx;
-    }
+    azimuth_bin_index_.add(entry.footprint.azimuth, tracker_idx, entry.footprint.r_min);
+    prep_data.trackers.emplace_back(std::move(entry));
+    ++tracker_idx;
   }
 
   return prep_data;
@@ -136,29 +125,26 @@ void PolarAssociation::processMeasurement(
   const auto candidate_indices = azimuth_bin_index_.find(meas_fp.azimuth, meas_fp.r_min);
 
   for (const size_t tracker_idx : candidate_indices) {
-    const auto tracker_type = prep_data.tracker_types[tracker_idx];
+    const auto & tracker_entry = prep_data.trackers[tracker_idx];
 
-    const auto association_params_opt = get_map_value_if_exists(tracker_params_map, tracker_type);
+    const auto association_params_opt =
+      get_map_value_if_exists(tracker_params_map, tracker_entry.type);
     if (!association_params_opt) continue;
     const auto & association_params = association_params_opt->get();
-
-    const auto & tracked_object = prep_data.tracked_objects[tracker_idx];
-    const auto & tracker_fp = prep_data.tracker_footprints[tracker_idx];
 
     // Depth gate: the cluster's closest 3D corner must be near the tracker's closest 3D corner.
     // LiDAR can only detect the nearest visible surface of a solid object, so a cluster at the
     // far side or interior of a tracker's bounding box is physically impossible.
-    const double depth_gap = std::abs(meas_fp.r_min_3d - tracker_fp.r_min_3d);
+    const double depth_gap = std::abs(meas_fp.r_min_3d - tracker_entry.footprint.r_min_3d);
     if (depth_gap > DEPTH_GATE_THRESHOLD) continue;
 
-    bool has_significant_shape_change = false;
-    const double score = polar_scoring::calculatePolarAssignmentScore(
-      meas_fp, tracker_fp, measurement_object, tracked_object, tracker_type,
-      association_params.min_iou, has_significant_shape_change);
+    const auto result = polar_scoring::calculatePolarAssignmentScore(
+      meas_fp, tracker_entry.footprint, measurement_object, tracker_entry.object,
+      tracker_entry.type, association_params.min_iou);
 
-    if (score > INVALID_SCORE) {
-      association_data.entries.emplace_back(
-        types::AssociationEntry{tracker_idx, measurement_idx, score, has_significant_shape_change});
+    if (result.score > INVALID_SCORE) {
+      association_data.entries.emplace_back(types::AssociationEntry{
+        tracker_idx, measurement_idx, result.score, result.has_significant_shape_change});
     }
   }
 }

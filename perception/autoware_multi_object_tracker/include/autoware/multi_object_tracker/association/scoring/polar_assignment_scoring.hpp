@@ -15,6 +15,7 @@
 #ifndef AUTOWARE__MULTI_OBJECT_TRACKER__ASSOCIATION__SCORING__POLAR_ASSIGNMENT_SCORING_HPP_
 #define AUTOWARE__MULTI_OBJECT_TRACKER__ASSOCIATION__SCORING__POLAR_ASSIGNMENT_SCORING_HPP_
 
+#include "autoware/multi_object_tracker/association/scoring/scoring_types.hpp"
 #include "autoware/multi_object_tracker/types.hpp"
 
 #include <cmath>
@@ -55,6 +56,10 @@ inline double normalizeAngle(double angle)
 constexpr double PERSPECTIVE_IOU_SHAPE_CHECK_THRESHOLD = 0.7;
 // Area ratio above which the shape change is considered significant
 constexpr double AREA_RATIO_THRESHOLD = 2.0;
+// Scale [m] for graded closest-point proximity in vehicle tracker scoring
+constexpr double DEPTH_PROXIMITY_SCALE = 2.0;
+// Weight of closest-point proximity in the combined score for vehicle trackers
+constexpr double DEPTH_PROXIMITY_WEIGHT = 0.3;
 
 /// Compute polar footprint of an object relative to ego position and heading.
 /// Object pose and shape are in the map frame; the result is in ego-centric polar coordinates.
@@ -72,14 +77,13 @@ PolarFootprint computePolarFootprint(
 double azimuthIoU(const AzimuthInterval & a, const AzimuthInterval & b);
 
 /// Compute a combined [0, 1] polar assignment score.
-/// Uses 2D perspective IoU in (azimuth [rad] × height [m]) space.
-/// Returns 0.0 when the pair fails the min_iou gate.
-/// Sets has_significant_shape_change when the pair is a vehicle tracker and their areas
-/// differ noticeably despite a low perspective IoU.
-double calculatePolarAssignmentScore(
+/// Uses 2D perspective IoU in (azimuth [rad] × height [m]) space, blended with a graded
+/// closest-point proximity term for vehicle trackers.
+/// Returns score=0.0 when the pair fails the min_iou gate.
+ScoringResult calculatePolarAssignmentScore(
   const PolarFootprint & meas_fp, const PolarFootprint & tracker_fp,
   const types::DynamicObject & measurement_object, const types::DynamicObject & tracked_object,
-  types::TrackerType tracker_type, double min_iou, bool & has_significant_shape_change);
+  types::TrackerType tracker_type, double min_iou);
 
 }  // namespace polar_scoring
 }  // namespace autoware::multi_object_tracker
