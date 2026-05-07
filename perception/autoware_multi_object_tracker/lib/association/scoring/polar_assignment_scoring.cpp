@@ -149,12 +149,20 @@ ScoringResult calculatePolarAssignmentScore(
   const types::DynamicObject & measurement_object, const types::DynamicObject & tracked_object,
   const types::TrackerType tracker_type, const double min_iou)
 {
-  ScoringResult result{0.0, false};
+  ScoringResult result{0.0, false, 0.0, 0.0, 0.0};
 
   // 2D perspective IoU in (azimuth [rad] × height [m]) space.
   const double az_inter = azimuthIntersectionSpan(meas_fp.azimuth, tracker_fp.azimuth);
   const double h_inter = std::max(
     0.0, std::min(meas_fp.z_max, tracker_fp.z_max) - std::max(meas_fp.z_min, tracker_fp.z_min));
+
+  const double az_union =
+    2.0 * meas_fp.azimuth.half_span + 2.0 * tracker_fp.azimuth.half_span - az_inter;
+  const double v_union =
+    (meas_fp.z_max - meas_fp.z_min) + (tracker_fp.z_max - tracker_fp.z_min) - h_inter;
+
+  result.azimuth_iou = (az_union > MIN_SPAN) ? az_inter / az_union : 0.0;
+  result.vertical_iou = (v_union > MIN_SPAN) ? h_inter / v_union : 0.0;
 
   const double inter_area = az_inter * h_inter;
   const double area_meas_fp = 2.0 * meas_fp.azimuth.half_span * (meas_fp.z_max - meas_fp.z_min);
@@ -163,6 +171,7 @@ ScoringResult calculatePolarAssignmentScore(
   const double union_area = area_meas_fp + area_trk_fp - inter_area;
 
   const double perspective_iou = (union_area > MIN_SPAN) ? inter_area / union_area : 0.0;
+  result.perspective_iou = perspective_iou;
 
   if (perspective_iou < min_iou) return result;
 

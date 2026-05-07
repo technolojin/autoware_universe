@@ -23,7 +23,9 @@
 
 #include <algorithm>
 #include <cmath>
+#include <iomanip>
 #include <limits>
+#include <sstream>
 #include <vector>
 
 namespace
@@ -224,11 +226,24 @@ bool Tracker::updateWithMeasurement(
     useShapeFilter() && channel_info.trust_extension &&
     (object.shape.type == autoware_perception_msgs::msg::Shape::BOUNDING_BOX);
 
+  const auto shortUuid = [](const unique_identifier_msgs::msg::UUID & uuid) {
+    std::ostringstream ss;
+    ss << std::hex << std::setfill('0');
+    for (int i = 0; i < 3; ++i) ss << std::setw(2) << static_cast<int>(uuid.uuid[i]);
+    return ss.str();
+  };
+
   if (!has_significant_shape_change && !force_conditioned) {
     if (shape_filter_enabled) {
       unstable_shape_filter_.processNormalMeasurement(object);
     }
     // 1. Normal update
+    RCLCPP_INFO(
+      rclcpp::get_logger("Tracker"),
+      "[NORMAL_UPDATE] trk=%s det=%s det_pos_diff=(%.2f, %.2f)",
+      getUuidString().substr(0, 6).c_str(), shortUuid(object.uuid).c_str(),
+      object.pose.position.x - object_.pose.position.x, 
+      object.pose.position.y - object_.pose.position.y);
     measure(object, measurement_time, channel_info);
     object_.trust_extension = object.trust_extension;
 
@@ -264,6 +279,12 @@ bool Tracker::updateWithMeasurement(
       types::DynamicObject predicted_object;
       getTrackedObject(measurement_time, predicted_object);
 
+      RCLCPP_INFO(
+        rclcpp::get_logger("Tracker"),
+        "[UNSTABLE_SHAPE] trk=%s det=%s det_pos_diff=(%.2f, %.2f)",
+        getUuidString().substr(0, 6).c_str(), shortUuid(object.uuid).c_str(),
+        object.pose.position.x-predicted_object.pose.position.x, 
+        object.pose.position.y-predicted_object.pose.position.y);
       conditionedUpdate(object, predicted_object, tracker_shape, measurement_time, channel_info);
     }
   }

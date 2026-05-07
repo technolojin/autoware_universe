@@ -23,6 +23,9 @@ struct ScoringResult
 {
   double score;
   bool has_significant_shape_change;
+  double azimuth_iou;    // 1D IoU of azimuth intervals
+  double vertical_iou;   // 1D IoU of height intervals
+  double perspective_iou;  // 2D IoU in (azimuth × height) space
 };
 
 }  // namespace autoware::multi_object_tracker

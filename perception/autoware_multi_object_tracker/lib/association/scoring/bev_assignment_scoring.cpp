@@ -38,7 +38,7 @@ ScoringResult calculateBevAssignmentScore(
   const types::DynamicObject & measurement_object, const classes::Label measurement_label,
   const InverseCovariance2D & inv_cov, const double unknown_association_giou_threshold)
 {
-  ScoringResult result{INVALID_SCORE, false};
+  ScoringResult result{INVALID_SCORE, false, 0.0, 0.0, 0.0};
 
   // When both tracker and measurement are unknown, use generalized IoU only
   if (tracker_label == classes::Label::UNKNOWN && measurement_label == classes::Label::UNKNOWN) {

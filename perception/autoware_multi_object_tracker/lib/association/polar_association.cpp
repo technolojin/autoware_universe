@@ -24,9 +24,11 @@
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 
 #include <cmath>
+#include <iomanip>
 #include <iterator>
 #include <list>
 #include <memory>
+#include <sstream>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -40,7 +42,15 @@ constexpr double INVALID_SCORE = 0.0;
 // Depth gate: maximum allowed gap between the closest 3D corners of measurement and tracker [m].
 // Enforces the LiDAR physics constraint that a cluster must originate from the closest visible
 // surface of an object, not from its interior or far side.
-constexpr double DEPTH_GATE_THRESHOLD = 2.0;
+constexpr double DEPTH_GATE_THRESHOLD = 4.0;
+
+std::string shortUuid(const unique_identifier_msgs::msg::UUID & uuid)
+{
+  std::ostringstream ss;
+  ss << std::hex << std::setfill('0');
+  for (int i = 0; i < 3; ++i) ss << std::setw(2) << static_cast<int>(uuid.uuid[i]);
+  return ss.str();
+}
 
 }  // namespace
 
@@ -136,16 +146,36 @@ void PolarAssociation::processMeasurement(
     // LiDAR can only detect the nearest visible surface of a solid object, so a cluster at the
     // far side or interior of a tracker's bounding box is physically impossible.
     const double depth_gap = std::abs(meas_fp.r_min_3d - tracker_entry.footprint.r_min_3d);
-    if (depth_gap > DEPTH_GATE_THRESHOLD) continue;
+    if (depth_gap > DEPTH_GATE_THRESHOLD) {
+      RCLCPP_INFO(
+        rclcpp::get_logger("polar_association"),
+        "[DEPTH_FAIL] det=%s trk=%s gap=%.2f thr=%.2f",
+        shortUuid(measurement_object.uuid).c_str(),
+        shortUuid(tracker_entry.object.uuid).c_str(), depth_gap, DEPTH_GATE_THRESHOLD);
+      continue;
+    }
 
     const auto result = polar_scoring::calculatePolarAssignmentScore(
       meas_fp, tracker_entry.footprint, measurement_object, tracker_entry.object,
       tracker_entry.type, association_params.min_iou);
 
     if (result.score > INVALID_SCORE) {
+      RCLCPP_INFO(
+        rclcpp::get_logger("polar_association"),
+        "[CANDIDATE] det=%s trk=%s score=%.3f az_iou=%.3f v_iou=%.3f p_iou=%.3f",
+        shortUuid(measurement_object.uuid).c_str(),
+        shortUuid(tracker_entry.object.uuid).c_str(), result.score,
+        result.azimuth_iou, result.vertical_iou, result.perspective_iou);
       association_data.entries.emplace_back(
         types::AssociationEntry{
           tracker_idx, measurement_idx, result.score, result.has_significant_shape_change});
+    } else {
+      RCLCPP_INFO(
+        rclcpp::get_logger("polar_association"),
+        "[SCORE_FAIL] det=%s trk=%s az_iou=%.3f v_iou=%.3f p_iou=%.3f min_iou=%.3f",
+        shortUuid(measurement_object.uuid).c_str(),
+        shortUuid(tracker_entry.object.uuid).c_str(),
+        result.azimuth_iou, result.vertical_iou, result.perspective_iou, association_params.min_iou);
     }
   }
 }
@@ -229,6 +259,12 @@ void PolarAssociation::assign(
 
   for (const auto & [tracker_idx, measurement_idx] : direct_assignment) {
     if (score[tracker_idx][measurement_idx] >= score_threshold_) {
+      RCLCPP_INFO(
+        rclcpp::get_logger("polar_association"),
+        "[MATCHED] trk=%s det=%s score=%.3f",
+        shortUuid(data.tracker_uuids[tracker_idx]).c_str(),
+        shortUuid(data.measurement_uuids[measurement_idx]).c_str(),
+        score[tracker_idx][measurement_idx]);
       association_result.add(
         data.tracker_uuids[tracker_idx], data.measurement_uuids[measurement_idx]);
 

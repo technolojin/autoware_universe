@@ -377,6 +377,27 @@ bool VehicleTracker::conditionedUpdate(
 
   // Determine update strategy
   UpdateStrategy strategy = determineUpdateStrategy(meas_for_strategy, prediction);
+  const auto shortUuid = [](const unique_identifier_msgs::msg::UUID & uuid) {
+    std::ostringstream ss;
+    ss << std::hex << std::setfill('0');
+    for (int i = 0; i < 3; ++i) ss << std::setw(2) << static_cast<int>(uuid.uuid[i]);
+    return ss.str();
+  };
+
+  {
+    const char * strategy_name =
+      strategy.type == UpdateStrategyType::FRONT_WHEEL_UPDATE ? "FRONT_WHEEL" :
+      strategy.type == UpdateStrategyType::REAR_WHEEL_UPDATE  ? "REAR_WHEEL"  : "WEAK";
+    RCLCPP_INFO(
+      logger_,
+      "[conditionedUpdate] trk=%s det=%s strategy=%s "
+      "det_pos=(%.2f, %.2f) anchor=(%.2f, %.2f)",
+      getUuidString().substr(0, 6).c_str(), shortUuid(measurement.uuid).c_str(), strategy_name,
+      measurement.pose.position.x-prediction.pose.position.x, 
+      measurement.pose.position.y-prediction.pose.position.y,
+      strategy.anchor_point.x-prediction.pose.position.x,
+      strategy.anchor_point.y-prediction.pose.position.y);
+  }
 
   // Handle weak update strategy (no edge alignment - use weak update with pseudo measurement)
   if (strategy.type == UpdateStrategyType::WEAK_UPDATE) {
@@ -389,7 +410,17 @@ bool VehicleTracker::conditionedUpdate(
     // Apply the weak measurement update using existing mechanism
     measure(pseudo_measurement, measurement_time, channel_info);
 
-    return true;
+    // debug
+    { 
+      RCLCPP_INFO(
+        logger_,
+        "[conditionedUpdate] trk=%s det=%s strategy=WEAK "
+        "det_pos=(%.2f, %.2f)",
+        getUuidString().substr(0, 6).c_str(), shortUuid(measurement.uuid).c_str(),
+        measurement.pose.position.x-prediction.pose.position.x, 
+        measurement.pose.position.y- prediction.pose.position.y);
+      return true;
+    }
   }
 
   // Handle wheel-based update strategies (FRONT_WHEEL_UPDATE or REAR_WHEEL_UPDATE)
