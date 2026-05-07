@@ -58,6 +58,12 @@ public:
   // with partial detections (even from trusted bbox channels), so always use conditioned update
   // when has_significant_shape_change fires.
   bool useShapeFilter() const override { return false; }
+  // Cluster measurements (trust_extension=false) always use conditioned update because their
+  // bounding box orientation is in baselink frame and only edge-based update is accurate.
+  bool preferConditionedUpdate(const types::InputChannel & channel_info) const override
+  {
+    return !channel_info.trust_extension;
+  }
 };
 
 }  // namespace autoware::multi_object_tracker
