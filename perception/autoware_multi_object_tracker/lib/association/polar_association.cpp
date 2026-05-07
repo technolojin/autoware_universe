@@ -143,8 +143,9 @@ void PolarAssociation::processMeasurement(
       tracker_entry.type, association_params.min_iou);
 
     if (result.score > INVALID_SCORE) {
-      association_data.entries.emplace_back(types::AssociationEntry{
-        tracker_idx, measurement_idx, result.score, result.has_significant_shape_change});
+      association_data.entries.emplace_back(
+        types::AssociationEntry{
+          tracker_idx, measurement_idx, result.score, result.has_significant_shape_change});
     }
   }
 }

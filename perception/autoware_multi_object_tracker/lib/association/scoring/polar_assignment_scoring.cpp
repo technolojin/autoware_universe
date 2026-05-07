@@ -189,8 +189,7 @@ ScoringResult calculatePolarAssignmentScore(
   // tracker's nearest surface — the primary observable for partial LiDAR returns.
   if (is_vehicle) {
     const double depth_diff = std::abs(meas_fp.r_min_3d - tracker_fp.r_min_3d);
-    const double depth_proximity =
-      std::max(0.0, 1.0 - depth_diff / DEPTH_PROXIMITY_SCALE);
+    const double depth_proximity = std::max(0.0, 1.0 - depth_diff / DEPTH_PROXIMITY_SCALE);
     result.score =
       iou_score * (1.0 - DEPTH_PROXIMITY_WEIGHT) + depth_proximity * DEPTH_PROXIMITY_WEIGHT;
   } else {

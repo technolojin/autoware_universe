@@ -346,10 +346,8 @@ types::DynamicObject VehicleTracker::alignClusterToTrackerOrientation(
   const double lat_center = (lat_min + lat_max) * 0.5;
 
   types::DynamicObject aligned = cluster;
-  aligned.pose.position.x =
-    cluster.pose.position.x + long_center * c_tr - lat_center * s_tr;
-  aligned.pose.position.y =
-    cluster.pose.position.y + long_center * s_tr + lat_center * c_tr;
+  aligned.pose.position.x = cluster.pose.position.x + long_center * c_tr - lat_center * s_tr;
+  aligned.pose.position.y = cluster.pose.position.y + long_center * s_tr + lat_center * c_tr;
 
   tf2::Quaternion q;
   q.setRPY(0.0, 0.0, tracker_yaw);
