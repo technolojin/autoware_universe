@@ -15,8 +15,9 @@
 #ifndef AUTOWARE__MULTI_OBJECT_TRACKER__TRACKER__MODEL__MULTIPLE_VEHICLE_TRACKER_HPP_
 #define AUTOWARE__MULTI_OBJECT_TRACKER__TRACKER__MODEL__MULTIPLE_VEHICLE_TRACKER_HPP_
 
-#include "autoware/multi_object_tracker/tracker/model/tracker_base.hpp"
+#include "autoware/multi_object_tracker/object_model/object_model.hpp"
 #include "autoware/multi_object_tracker/tracker/model/vehicle_tracker.hpp"
+#include "autoware/multi_object_tracker/tracker/motion_model/bicycle_motion_model.hpp"
 #include "autoware/multi_object_tracker/types.hpp"
 
 #include <rclcpp/time.hpp>
@@ -24,11 +25,12 @@
 namespace autoware::multi_object_tracker
 {
 
-class MultipleVehicleTracker : public Tracker
+class MultipleVehicleTracker : public VehicleTracker
 {
 private:
-  VehicleTracker normal_vehicle_tracker_;
-  VehicleTracker big_vehicle_tracker_;
+  BicycleMotionModel big_motion_model_;
+  object_model::ObjectModel big_object_model_;
+  BicycleMotionModel::LengthUpdateAnchor big_shape_update_anchor_;
 
 public:
   MultipleVehicleTracker(const rclcpp::Time & time, const types::DynamicObject & object);
@@ -50,9 +52,8 @@ public:
   bool getTrackedObject(
     const rclcpp::Time & time, types::DynamicObject & object,
     const bool to_publish = false) const override;
-  void setOrientationAvailability(
-    const types::OrientationAvailability & orientation_availability) override;
-  virtual ~MultipleVehicleTracker() {}
+
+  ~MultipleVehicleTracker() override = default;
 };
 
 }  // namespace autoware::multi_object_tracker

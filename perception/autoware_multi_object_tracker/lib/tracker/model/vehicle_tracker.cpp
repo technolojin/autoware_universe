@@ -133,45 +133,63 @@ bool VehicleTracker::predict(const rclcpp::Time & time)
   return motion_model_.predictState(time);
 }
 
+bool VehicleTracker::updateKinematics(
+  const types::DynamicObject & object, const types::InputChannel & channel_info,
+  BicycleMotionModel & model)
+{
+  const bool is_yaw_available =
+    object.kinematics.orientation_availability != types::OrientationAvailability::UNAVAILABLE &&
+    channel_info.trust_orientation;
+  const bool is_velocity_available = object.kinematics.has_twist;
+
+  const double & x = object.pose.position.x;
+  const double & y = object.pose.position.y;
+  const double & yaw = tf2::getYaw(object.pose.orientation);
+  const double & vel_x = object.twist.linear.x;
+  const double & vel_y = object.twist.linear.y;
+  constexpr double min_length = 1.0;
+  const double length = std::max(object.shape.dimensions.x, min_length);
+
+  bool is_updated = false;
+  if (is_yaw_available && is_velocity_available) {
+    is_updated = model.updateStatePoseHeadVel(
+      x, y, yaw, object.pose_covariance, vel_x, vel_y, object.twist_covariance, length);
+  } else if (is_yaw_available) {
+    is_updated = model.updateStatePoseHead(x, y, yaw, object.pose_covariance, length);
+  } else if (is_velocity_available) {
+    is_updated = model.updateStatePoseVel(
+      x, y, object.pose_covariance, yaw, vel_x, vel_y, object.twist_covariance, length);
+  } else {
+    is_updated = model.updateStatePose(x, y, object.pose_covariance, length);
+  }
+  model.limitStates();
+  return is_updated;
+}
+
+void VehicleTracker::applyVelocitySuppression(types::DynamicObject & object) const
+{
+  using autoware_utils_geometry::xyzrpy_covariance_index::XYZRPY_COV_IDX;
+  auto & twist = object.twist;
+  constexpr double vel_cov_buffer = 0.7;
+  constexpr double vel_too_low_ignore = 0.25;
+  const double vel_long = std::abs(twist.linear.x);
+  if (vel_long > vel_too_low_ignore) {
+    const double vel_limit =
+      std::max(std::sqrt(object.twist_covariance[XYZRPY_COV_IDX::X_X]) - vel_cov_buffer, 0.0);
+    if (vel_long < vel_limit) {
+      twist.linear.x = twist.linear.x > 0 ? vel_too_low_ignore : -vel_too_low_ignore;
+    } else {
+      double vel_suppressed = vel_long - vel_limit;
+      vel_suppressed = std::max(vel_suppressed, vel_too_low_ignore);
+      twist.linear.x = twist.linear.x > 0 ? vel_suppressed : -vel_suppressed;
+    }
+  }
+}
+
 bool VehicleTracker::measureWithPose(
   const types::DynamicObject & object, const types::InputChannel & channel_info)
 {
-  // get measurement yaw angle to update
-  bool is_yaw_available =
-    object.kinematics.orientation_availability != types::OrientationAvailability::UNAVAILABLE &&
-    channel_info.trust_orientation;
-
-  bool is_velocity_available = object.kinematics.has_twist;
-
-  // update
-  bool is_updated = false;
-  {
-    const double & x = object.pose.position.x;
-    const double & y = object.pose.position.y;
-    const double & yaw = tf2::getYaw(object.pose.orientation);
-    const double & vel_x = object.twist.linear.x;
-    const double & vel_y = object.twist.linear.y;
-    constexpr double min_length = 1.0;  // minimum length to avoid division by zero
-    const double length = std::max(object.shape.dimensions.x, min_length);
-
-    if (is_yaw_available && is_velocity_available) {
-      // update with yaw angle and velocity
-      is_updated = motion_model_.updateStatePoseHeadVel(
-        x, y, yaw, object.pose_covariance, vel_x, vel_y, object.twist_covariance, length);
-    } else if (is_yaw_available && !is_velocity_available) {
-      // update with yaw angle, but without velocity
-      is_updated = motion_model_.updateStatePoseHead(x, y, yaw, object.pose_covariance, length);
-    } else if (!is_yaw_available && is_velocity_available) {
-      // update without yaw angle, but with velocity
-      is_updated = motion_model_.updateStatePoseVel(
-        x, y, object.pose_covariance, yaw, vel_x, vel_y, object.twist_covariance, length);
-    } else {
-      // update without yaw angle and velocity
-      is_updated = motion_model_.updateStatePose(
-        x, y, object.pose_covariance, length);  // update without yaw angle and velocity
-    }
-    motion_model_.limitStates();
-  }
+  bool is_updated = updateKinematics(object, channel_info, motion_model_);
 
   // position z
   {
@@ -282,29 +300,8 @@ bool VehicleTracker::getTrackedObject(
   }
   object.shape.dimensions.x = motion_model_.getLength();  // set length
 
-  // if the tracker is to be published, check twist uncertainty
-  // in case the twist uncertainty is large, lower the twist value
   if (to_publish) {
-    using autoware_utils_geometry::xyzrpy_covariance_index::XYZRPY_COV_IDX;
-    // lower the x twist magnitude 1 sigma smaller
-    // if the twist is smaller than 1 sigma, the twist is zeroed
-    auto & twist = object.twist;
-    constexpr double vel_cov_buffer = 0.7;  // [m/s] buffer not to limit certain twist
-    constexpr double vel_too_low_ignore =
-      0.25;  // [m/s] if the velocity is lower than this, do not limit
-    const double vel_long = std::abs(twist.linear.x);
-    if (vel_long > vel_too_low_ignore) {
-      const double vel_limit = std::max(
-        std::sqrt(object.twist_covariance[XYZRPY_COV_IDX::X_X]) - vel_cov_buffer, 0.0);  // [m/s]
-
-      if (vel_long < vel_limit) {
-        twist.linear.x = twist.linear.x > 0 ? vel_too_low_ignore : -vel_too_low_ignore;
-      } else {
-        double vel_suppressed = vel_long - vel_limit;
-        vel_suppressed = std::max(vel_suppressed, vel_too_low_ignore);
-        twist.linear.x = twist.linear.x > 0 ? vel_suppressed : -vel_suppressed;
-      }
-    }
+    applyVelocitySuppression(object);
   }
 
   return true;

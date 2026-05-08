@@ -38,15 +38,18 @@ class VehicleTracker : public Tracker
 private:
   rclcpp::Logger logger_;
 
+protected:
   object_model::ObjectModel object_model_;
-
   double velocity_deviation_threshold_;
-
   BicycleMotionModel motion_model_;
   using IDX = BicycleMotionModel::IDX;
+  BicycleMotionModel::LengthUpdateAnchor shape_update_anchor_;
 
-  // determine anchor point for shape updates by last update strategy
-  BicycleMotionModel::LengthUpdateAnchor shape_update_anchor_;  // Default: CENTER
+  // Kinematic-only model update (no shape side effects); for subclasses managing secondary models
+  bool updateKinematics(
+    const types::DynamicObject & object, const types::InputChannel & channel_info,
+    BicycleMotionModel & model);
+  void applyVelocitySuppression(types::DynamicObject & object) const;
 
 public:
   VehicleTracker(

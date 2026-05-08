@@ -16,30 +16,92 @@
 
 #include "autoware/multi_object_tracker/object_model/object_model.hpp"
 
+#include <tf2/utils.hpp>
+
+#include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
+
 namespace autoware::multi_object_tracker
 {
+
 MultipleVehicleTracker::MultipleVehicleTracker(
   const rclcpp::Time & time, const types::DynamicObject & object)
-: Tracker(time, object),
-  normal_vehicle_tracker_(object_model::normal_vehicle, time, object),
-  big_vehicle_tracker_(object_model::big_vehicle, time, object)
+: VehicleTracker(object_model::normal_vehicle, time, object),
+  big_object_model_(object_model::big_vehicle),
+  big_shape_update_anchor_(BicycleMotionModel::LengthUpdateAnchor::CENTER)
 {
   tracker_type_ = TrackerType::MULTIPLE_VEHICLE;
+
+  big_motion_model_.setMotionParams(
+    big_object_model_.process_noise, big_object_model_.bicycle_state,
+    big_object_model_.process_limit);
+
+  // Initialize big model with the same initial state as the normal model
+  using autoware_utils_geometry::xyzrpy_covariance_index::XYZRPY_COV_IDX;
+  const double x = object.pose.position.x;
+  const double y = object.pose.position.y;
+  const double yaw = tf2::getYaw(object.pose.orientation);
+
+  auto pose_cov = object.pose_covariance;
+  if (!object.kinematics.has_position_covariance) {
+    const auto & p0_cov_x = big_object_model_.initial_covariance.pos_x;
+    const auto & p0_cov_y = big_object_model_.initial_covariance.pos_y;
+    const auto & p0_cov_yaw = big_object_model_.initial_covariance.yaw;
+    const double cos_yaw = std::cos(yaw);
+    const double sin_yaw = std::sin(yaw);
+    const double sin_2yaw = std::sin(2.0 * yaw);
+    pose_cov[XYZRPY_COV_IDX::X_X] = p0_cov_x * cos_yaw * cos_yaw + p0_cov_y * sin_yaw * sin_yaw;
+    pose_cov[XYZRPY_COV_IDX::X_Y] = 0.5 * (p0_cov_x - p0_cov_y) * sin_2yaw;
+    pose_cov[XYZRPY_COV_IDX::Y_Y] = p0_cov_x * sin_yaw * sin_yaw + p0_cov_y * cos_yaw * cos_yaw;
+    pose_cov[XYZRPY_COV_IDX::Y_X] = pose_cov[XYZRPY_COV_IDX::X_Y];
+    pose_cov[XYZRPY_COV_IDX::YAW_YAW] = p0_cov_yaw;
+  }
+
+  double vel_x = 0.0;
+  double vel_y = 0.0;
+  double vel_x_cov = big_object_model_.initial_covariance.vel_long;
+  double vel_y_cov = big_object_model_.bicycle_state.init_slip_angle_cov;
+  if (object.kinematics.has_twist) {
+    vel_x = object.twist.linear.x;
+    vel_y = object.twist.linear.y;
+  }
+  if (object.kinematics.has_twist_covariance) {
+    vel_x_cov = object.twist_covariance[XYZRPY_COV_IDX::X_X];
+    vel_y_cov = object.twist_covariance[XYZRPY_COV_IDX::Y_Y];
+  }
+
+  const double & length = object_.shape.dimensions.x;
+  big_motion_model_.initialize(time, x, y, yaw, pose_cov, vel_x, vel_x_cov, vel_y, vel_y_cov, length);
 }
 
 bool MultipleVehicleTracker::predict(const rclcpp::Time & time)
 {
-  big_vehicle_tracker_.predict(time);
-  normal_vehicle_tracker_.predict(time);
+  VehicleTracker::predict(time);
+  big_motion_model_.predictState(time);
   return true;
 }
 
 bool MultipleVehicleTracker::measure(
-  const types::DynamicObject & object, const rclcpp::Time & time,
+  const types::DynamicObject & in_object, const rclcpp::Time & time,
   const types::InputChannel & channel_info)
 {
-  big_vehicle_tracker_.measure(object, time, channel_info);
-  normal_vehicle_tracker_.measure(object, time, channel_info);
+  // Update normal model and shared object state (shape, z position)
+  VehicleTracker::measure(in_object, time, channel_info);
+
+  // Update big model kinematics with yaw-flip correction against big model's current heading
+  types::DynamicObject corrected = in_object;
+  {
+    const double this_yaw = big_motion_model_.getYawState();
+    const double updating_yaw = tf2::getYaw(corrected.pose.orientation);
+    double yaw_diff = updating_yaw - this_yaw;
+    while (yaw_diff > M_PI) yaw_diff -= 2 * M_PI;
+    while (yaw_diff < -M_PI) yaw_diff += 2 * M_PI;
+    if (std::abs(yaw_diff) > M_PI_2) {
+      tf2::Quaternion q;
+      q.setRPY(0, 0, updating_yaw + M_PI);
+      corrected.pose.orientation = tf2::toMsg(q);
+    }
+  }
+  updateKinematics(corrected, channel_info, big_motion_model_);
 
   return true;
 }
@@ -49,18 +111,49 @@ bool MultipleVehicleTracker::conditionedUpdate(
   const autoware_perception_msgs::msg::Shape & tracker_shape, const rclcpp::Time & measurement_time,
   const types::InputChannel & channel_info)
 {
-  big_vehicle_tracker_.conditionedUpdate(
-    measurement, prediction, tracker_shape, measurement_time, channel_info);
-  normal_vehicle_tracker_.conditionedUpdate(
-    measurement, prediction, tracker_shape, measurement_time, channel_info);
+  // Determine strategy once — pure computation, same result for both models
+  UpdateStrategy strategy = determineUpdateStrategy(measurement, prediction);
 
-  return true;
+  if (strategy.type == UpdateStrategyType::WEAK_UPDATE) {
+    // WEAK_UPDATE calls measure() (virtual → MultipleVehicleTracker::measure) → both models updated
+    types::DynamicObject pseudo_measurement = prediction;
+    createPseudoMeasurement(measurement, pseudo_measurement, tracker_shape, true);
+    measure(pseudo_measurement, measurement_time, channel_info);
+    return true;
+  }
+
+  // FRONT or REAR wheel update: apply to both models
+  std::array<double, 36> pose_cov = measurement.pose_covariance;
+  bool is_updated = false;
+  if (strategy.type == UpdateStrategyType::FRONT_WHEEL_UPDATE) {
+    shape_update_anchor_ = BicycleMotionModel::LengthUpdateAnchor::FRONT;
+    big_shape_update_anchor_ = BicycleMotionModel::LengthUpdateAnchor::FRONT;
+    is_updated =
+      motion_model_.updateStatePoseFront(strategy.anchor_point.x, strategy.anchor_point.y, pose_cov);
+    big_motion_model_.updateStatePoseFront(
+      strategy.anchor_point.x, strategy.anchor_point.y, pose_cov);
+  } else {
+    shape_update_anchor_ = BicycleMotionModel::LengthUpdateAnchor::REAR;
+    big_shape_update_anchor_ = BicycleMotionModel::LengthUpdateAnchor::REAR;
+    is_updated =
+      motion_model_.updateStatePoseRear(strategy.anchor_point.x, strategy.anchor_point.y, pose_cov);
+    big_motion_model_.updateStatePoseRear(
+      strategy.anchor_point.x, strategy.anchor_point.y, pose_cov);
+  }
+
+  removeCache();
+  return is_updated;
 }
 
 void MultipleVehicleTracker::setObjectShape(const autoware_perception_msgs::msg::Shape & shape)
 {
-  big_vehicle_tracker_.setObjectShape(shape);
-  normal_vehicle_tracker_.setObjectShape(shape);
+  // Parent updates normal model wheel positions and resets shape_update_anchor_
+  VehicleTracker::setObjectShape(shape);
+
+  if (shape.type == autoware_perception_msgs::msg::Shape::BOUNDING_BOX) {
+    big_motion_model_.updateStateLength(shape.dimensions.x, big_shape_update_anchor_);
+    big_shape_update_anchor_ = BicycleMotionModel::LengthUpdateAnchor::CENTER;
+  }
 }
 
 bool MultipleVehicleTracker::getTrackedObject(
@@ -68,25 +161,29 @@ bool MultipleVehicleTracker::getTrackedObject(
 {
   const auto label = getHighestProbLabel();
 
-  if (label == classes::Label::CAR) {
-    normal_vehicle_tracker_.getTrackedObject(time, object, to_publish);
-  } else if (
+  if (
     label == classes::Label::BUS || label == classes::Label::TRUCK ||
     label == classes::Label::TRAILER) {
-    big_vehicle_tracker_.getTrackedObject(time, object, to_publish);
-  } else {
-    // If the label is others, use the normal vehicle tracker as a fallback
-    normal_vehicle_tracker_.getTrackedObject(time, object, to_publish);
-  }
-  object.uuid = object_.uuid;
-  return true;
-}
+    // Get base state (z position, shape, cache) from normal model without velocity suppression
+    VehicleTracker::getTrackedObject(time, object, false);
 
-void MultipleVehicleTracker::setOrientationAvailability(
-  const types::OrientationAvailability & orientation_availability)
-{
-  normal_vehicle_tracker_.setOrientationAvailability(orientation_availability);
-  big_vehicle_tracker_.setOrientationAvailability(orientation_availability);
+    // Override kinematics with big model's predicted state.
+    // Pass object.pose directly so getPredictedState updates x/y/orientation in-place
+    // while leaving pose.position.z intact (bicycle model has no z state).
+    if (!big_motion_model_.getPredictedState(
+          time, object.pose, object.pose_covariance, object.twist, object.twist_covariance)) {
+      return false;
+    }
+    object.shape.dimensions.x = big_motion_model_.getLength();
+
+    if (to_publish) {
+      applyVelocitySuppression(object);
+    }
+  } else {
+    VehicleTracker::getTrackedObject(time, object, to_publish);
+  }
+
+  return true;
 }
 
 }  // namespace autoware::multi_object_tracker
