@@ -1,13 +1,15 @@
-autoware_system_design_format: v0.1.0
+autoware_system_design_format: 0.3.0
 
 name: OperationModeTransitionManager.node
+package:
+  name: autoware_operation_mode_transition_manager
+  provider: autoware
 launch:
-  package: autoware_operation_mode_transition_manager
   plugin: autoware::operation_mode_transition_manager::OperationModeTransitionManager
   executable: operation_mode_transition_manager_node
   use_container: true
   container_name: control_container
-inputs:
+subscribers:
   - name: kinematics
     message_type: nav_msgs/msg/Odometry
   - name: steering
@@ -39,11 +41,11 @@ publishers:
 
 clients:
   - name: control_mode_request
-    message_type: autoware_vehicle_msgs/msg/ControlModeCommand
-parameter_files:
+    message_type: autoware_vehicle_msgs/srv/ControlModeCommand
+param_files:
   - name: operation_mode_transition_manager_param
     default: $(find-pkg-share autoware_operation_mode_transition_manager)/config/operation_mode_transition_manager.param.yaml
-parameters: []
+param_values: []
 processes:
   - name: manage_transition
     trigger_conditions:

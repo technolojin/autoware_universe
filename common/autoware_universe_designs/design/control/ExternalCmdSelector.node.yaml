@@ -1,13 +1,15 @@
-autoware_system_design_format: v0.1.0
+autoware_system_design_format: 0.3.0
 
 name: ExternalCmdSelector.node
+package:
+  name: autoware_external_cmd_selector
+  provider: autoware
 launch:
-  package: autoware_external_cmd_selector
   plugin: autoware::external_cmd_selector::ExternalCmdSelector
   executable: external_cmd_selector_node
   use_container: true
   container_name: target_container
-inputs:
+subscribers:
   # Local Source Inputs
   - name: local_pedals_cmd
     message_type: autoware_vehicle_msgs/msg/ActuationCommandStamped
@@ -36,7 +38,7 @@ inputs:
   - name: remote_heartbeat
     message_type: tier4_external_api_msgs/msg/Heartbeat
 
-outputs:
+publishers:
   # Selected Command Outputs
   - name: pedals_cmd
     message_type: autoware_vehicle_msgs/msg/ActuationCommandStamped
@@ -55,10 +57,10 @@ outputs:
   - name: current_selector_mode
     message_type: tier4_external_api_msgs/msg/SelectorMode
 
-parameter_files:
+param_files:
   - name: external_cmd_selector_param
     default: $(find-pkg-share autoware_external_cmd_selector)/config/external_cmd_selector.param.yaml
-parameters: []
+param_values: []
 
 processes:
   - name: select_command
