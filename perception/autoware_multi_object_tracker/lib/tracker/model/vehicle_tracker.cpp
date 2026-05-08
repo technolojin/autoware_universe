@@ -171,17 +171,19 @@ bool VehicleTracker::measureKinematics(
   BicycleMotionModel & model)
 {
   // Correct for 180-degree heading ambiguity relative to the model's current heading
-  types::DynamicObject corrected = in_object;
   const double current_yaw = model.getYawState();
-  const double updating_yaw = tf2::getYaw(corrected.pose.orientation);
-  double yaw_diff = updating_yaw - current_yaw;
-  while (yaw_diff > M_PI) yaw_diff -= 2 * M_PI;
-  while (yaw_diff < -M_PI) yaw_diff += 2 * M_PI;
-  if (std::abs(yaw_diff) > M_PI_2) {
-    tf2::Quaternion q;
-    q.setRPY(0, 0, updating_yaw + M_PI);
-    corrected.pose.orientation = tf2::toMsg(q);
+  const double updating_yaw = tf2::getYaw(in_object.pose.orientation);
+  const double yaw_diff =
+    autoware_utils_math::normalize_radian(updating_yaw - current_yaw);
+
+  if (std::abs(yaw_diff) <= M_PI_2) {
+    return updateKinematics(in_object, channel_info, model);
   }
+
+  types::DynamicObject corrected = in_object;
+  tf2::Quaternion q;
+  q.setRPY(0, 0, updating_yaw + M_PI);
+  corrected.pose.orientation = tf2::toMsg(q);
   return updateKinematics(corrected, channel_info, model);
 }
 
