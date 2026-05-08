@@ -51,4 +51,4 @@ processes:
     trigger_conditions:
       - periodic: 10.0
     outcomes:
-      - to_output: control_mode_request
+      - to_process: control_mode_request

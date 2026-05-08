@@ -188,7 +188,7 @@ connections:
     - operation_mode_transition_manager.subscriber.trajectory
   - - trajectory_follower.publisher.control_cmd
     - operation_mode_transition_manager.subscriber.trajectory_follower_control_cmd
-  - - vehicle_cmd_gate.publisher.control_cmd
+  - - vehicle_cmd_gate.publisher.command/control_cmd
     - operation_mode_transition_manager.subscriber.control_cmd
   - - subscriber.steering_status
     - operation_mode_transition_manager.subscriber.steering
@@ -231,7 +231,7 @@ connections:
   # ==========================================
   # 7. Global Outputs
   # ==========================================
-  - - vehicle_cmd_gate.publisher.control_cmd
+  - - vehicle_cmd_gate.publisher.command/control_cmd
     - publisher.control_cmd
   - - vehicle_cmd_gate.publisher.gear_cmd
     - publisher.gear_cmd

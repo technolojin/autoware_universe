@@ -6,7 +6,6 @@ package:
   provider: autoware
 launch:
   plugin: autoware::motion::control::trajectory_follower_node::Controller
-  executable: trajectory_follower_node
   use_container: true
   container_name: control_container
 subscribers:
