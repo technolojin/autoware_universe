@@ -18,8 +18,6 @@
 
 #include <tf2/utils.hpp>
 
-#include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
-
 namespace autoware::multi_object_tracker
 {
 
@@ -84,25 +82,8 @@ bool MultipleVehicleTracker::measure(
   const types::DynamicObject & in_object, const rclcpp::Time & time,
   const types::InputChannel & channel_info)
 {
-  // Update normal model and shared object state (shape, z position)
   VehicleTracker::measure(in_object, time, channel_info);
-
-  // Update big model kinematics with yaw-flip correction against big model's current heading
-  types::DynamicObject corrected = in_object;
-  {
-    const double this_yaw = big_motion_model_.getYawState();
-    const double updating_yaw = tf2::getYaw(corrected.pose.orientation);
-    double yaw_diff = updating_yaw - this_yaw;
-    while (yaw_diff > M_PI) yaw_diff -= 2 * M_PI;
-    while (yaw_diff < -M_PI) yaw_diff += 2 * M_PI;
-    if (std::abs(yaw_diff) > M_PI_2) {
-      tf2::Quaternion q;
-      q.setRPY(0, 0, updating_yaw + M_PI);
-      corrected.pose.orientation = tf2::toMsg(q);
-    }
-  }
-  updateKinematics(corrected, channel_info, big_motion_model_);
-
+  measureKinematics(in_object, channel_info, big_motion_model_);
   return true;
 }
 
@@ -122,37 +103,20 @@ bool MultipleVehicleTracker::conditionedUpdate(
     return true;
   }
 
-  // FRONT or REAR wheel update: apply to both models
-  std::array<double, 36> pose_cov = measurement.pose_covariance;
-  bool is_updated = false;
-  if (strategy.type == UpdateStrategyType::FRONT_WHEEL_UPDATE) {
-    shape_update_anchor_ = BicycleMotionModel::LengthUpdateAnchor::FRONT;
-    big_shape_update_anchor_ = BicycleMotionModel::LengthUpdateAnchor::FRONT;
-    is_updated =
-      motion_model_.updateStatePoseFront(strategy.anchor_point.x, strategy.anchor_point.y, pose_cov);
-    big_motion_model_.updateStatePoseFront(
-      strategy.anchor_point.x, strategy.anchor_point.y, pose_cov);
-  } else {
-    shape_update_anchor_ = BicycleMotionModel::LengthUpdateAnchor::REAR;
-    big_shape_update_anchor_ = BicycleMotionModel::LengthUpdateAnchor::REAR;
-    is_updated =
-      motion_model_.updateStatePoseRear(strategy.anchor_point.x, strategy.anchor_point.y, pose_cov);
-    big_motion_model_.updateStatePoseRear(
-      strategy.anchor_point.x, strategy.anchor_point.y, pose_cov);
-  }
-
+  // FRONT or REAR wheel update: apply to both models with the same strategy
+  const std::array<double, 36> pose_cov = measurement.pose_covariance;
+  bool is_updated =
+    applyConditionedUpdate(strategy, pose_cov, motion_model_, shape_update_anchor_);
+  is_updated = is_updated & applyConditionedUpdate(strategy, pose_cov, big_motion_model_, big_shape_update_anchor_);
   removeCache();
   return is_updated;
 }
 
 void MultipleVehicleTracker::setObjectShape(const autoware_perception_msgs::msg::Shape & shape)
 {
-  // Parent updates normal model wheel positions and resets shape_update_anchor_
   VehicleTracker::setObjectShape(shape);
-
   if (shape.type == autoware_perception_msgs::msg::Shape::BOUNDING_BOX) {
-    big_motion_model_.updateStateLength(shape.dimensions.x, big_shape_update_anchor_);
-    big_shape_update_anchor_ = BicycleMotionModel::LengthUpdateAnchor::CENTER;
+    updateModelLength(shape.dimensions.x, big_motion_model_, big_shape_update_anchor_);
   }
 }
 

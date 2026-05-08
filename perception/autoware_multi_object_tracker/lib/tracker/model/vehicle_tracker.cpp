@@ -166,6 +166,76 @@ bool VehicleTracker::updateKinematics(
   return is_updated;
 }
 
+bool VehicleTracker::measureKinematics(
+  const types::DynamicObject & in_object, const types::InputChannel & channel_info,
+  BicycleMotionModel & model)
+{
+  // Correct for 180-degree heading ambiguity relative to the model's current heading
+  types::DynamicObject corrected = in_object;
+  const double current_yaw = model.getYawState();
+  const double updating_yaw = tf2::getYaw(corrected.pose.orientation);
+  double yaw_diff = updating_yaw - current_yaw;
+  while (yaw_diff > M_PI) yaw_diff -= 2 * M_PI;
+  while (yaw_diff < -M_PI) yaw_diff += 2 * M_PI;
+  if (std::abs(yaw_diff) > M_PI_2) {
+    tf2::Quaternion q;
+    q.setRPY(0, 0, updating_yaw + M_PI);
+    corrected.pose.orientation = tf2::toMsg(q);
+  }
+  return updateKinematics(corrected, channel_info, model);
+}
+
+bool VehicleTracker::applyConditionedUpdate(
+  const UpdateStrategy & strategy, const std::array<double, 36> & pose_cov,
+  BicycleMotionModel & model, BicycleMotionModel::LengthUpdateAnchor & anchor)
+{
+  if (strategy.type == UpdateStrategyType::FRONT_WHEEL_UPDATE) {
+    anchor = BicycleMotionModel::LengthUpdateAnchor::FRONT;
+    return model.updateStatePoseFront(strategy.anchor_point.x, strategy.anchor_point.y, pose_cov);
+  }
+  // REAR_WHEEL_UPDATE
+  anchor = BicycleMotionModel::LengthUpdateAnchor::REAR;
+  return model.updateStatePoseRear(strategy.anchor_point.x, strategy.anchor_point.y, pose_cov);
+}
+
+void VehicleTracker::updateModelLength(
+  const double new_length, BicycleMotionModel & model,
+  BicycleMotionModel::LengthUpdateAnchor & anchor)
+{
+  model.updateStateLength(new_length, anchor);
+  anchor = BicycleMotionModel::LengthUpdateAnchor::CENTER;
+}
+
+void VehicleTracker::updateShapeState(const types::DynamicObject & object)
+{
+  constexpr double z_gain = 0.1;
+  object_.pose.position.z =
+    (1.0 - z_gain) * object_.pose.position.z + z_gain * object.pose.position.z;
+
+  if (object.shape.type != autoware_perception_msgs::msg::Shape::BOUNDING_BOX) return;
+
+  constexpr double size_max_multiplier = 1.5;
+  constexpr double size_min_multiplier = 0.25;
+  if (
+    object.shape.dimensions.x > object_model_.size_limit.length_max * size_max_multiplier ||
+    object.shape.dimensions.x < object_model_.size_limit.length_min * size_min_multiplier ||
+    object.shape.dimensions.y > object_model_.size_limit.width_max * size_max_multiplier ||
+    object.shape.dimensions.y < object_model_.size_limit.width_min * size_min_multiplier) {
+    return;
+  }
+
+  constexpr double gain = 0.4;
+  constexpr double gain_inv = 1.0 - gain;
+  auto & ext = object_.shape.dimensions;
+  ext.x = motion_model_.getLength();
+  ext.y = gain_inv * ext.y + gain * object.shape.dimensions.y;
+  ext.z = gain_inv * ext.z + gain * object.shape.dimensions.z;
+
+  limitObjectExtension(object_model_);
+  object_.shape.type = autoware_perception_msgs::msg::Shape::BOUNDING_BOX;
+  object_.area = types::getArea(object.shape);
+}
+
 void VehicleTracker::applyVelocitySuppression(types::DynamicObject & object) const
 {
   using autoware_utils_geometry::xyzrpy_covariance_index::XYZRPY_COV_IDX;
@@ -190,47 +260,7 @@ bool VehicleTracker::measureWithPose(
   const types::DynamicObject & object, const types::InputChannel & channel_info)
 {
   bool is_updated = updateKinematics(object, channel_info, motion_model_);
-
-  // position z
-  {
-    constexpr double gain = 0.1;
-    object_.pose.position.z =
-      (1.0 - gain) * object_.pose.position.z + gain * object.pose.position.z;
-  }
-
-  if (object.shape.type != autoware_perception_msgs::msg::Shape::BOUNDING_BOX) {
-    // do not update shape if the input is not a bounding box
-    return false;
-  }
-
-  // check object size abnormality
-  constexpr double size_max_multiplier = 1.5;
-  constexpr double size_min_multiplier = 0.25;
-  if (
-    object.shape.dimensions.x > object_model_.size_limit.length_max * size_max_multiplier ||
-    object.shape.dimensions.x < object_model_.size_limit.length_min * size_min_multiplier ||
-    object.shape.dimensions.y > object_model_.size_limit.width_max * size_max_multiplier ||
-    object.shape.dimensions.y < object_model_.size_limit.width_min * size_min_multiplier) {
-    return false;
-  }
-
-  // update object size
-  {
-    constexpr double gain = 0.4;
-    constexpr double gain_inv = 1.0 - gain;
-    auto & object_extension = object_.shape.dimensions;
-    object_extension.x = motion_model_.getLength();  // tracked by motion model
-    object_extension.y = gain_inv * object_extension.y + gain * object.shape.dimensions.y;
-    object_extension.z = gain_inv * object_extension.z + gain * object.shape.dimensions.z;
-  }
-
-  // set maximum and minimum size
-  limitObjectExtension(object_model_);
-
-  // set shape type, which is bounding box
-  object_.shape.type = autoware_perception_msgs::msg::Shape::BOUNDING_BOX;
-  object_.area = types::getArea(object.shape);
-
+  updateShapeState(object);
   return is_updated;
 }
 
@@ -238,7 +268,6 @@ bool VehicleTracker::measure(
   const types::DynamicObject & in_object, const rclcpp::Time & time,
   const types::InputChannel & channel_info)
 {
-  // check time gap
   const double dt = motion_model_.getDeltaTime(time);
   if (0.01 /*10msec*/ < dt) {
     RCLCPP_WARN(
@@ -248,29 +277,10 @@ bool VehicleTracker::measure(
       dt);
   }
 
-  // update object
-  types::DynamicObject updating_object = in_object;
-  // turn 180 deg if the updating object heads opposite direction
-  {
-    const double this_yaw = motion_model_.getYawState();
-    const double updating_yaw = tf2::getYaw(updating_object.pose.orientation);
-    double yaw_diff = updating_yaw - this_yaw;
-    while (yaw_diff > M_PI) yaw_diff -= 2 * M_PI;
-    while (yaw_diff < -M_PI) yaw_diff += 2 * M_PI;
-    if (std::abs(yaw_diff) > M_PI_2) {
-      tf2::Quaternion q;
-      q.setRPY(0, 0, updating_yaw + M_PI);
-      updating_object.pose.orientation = tf2::toMsg(q);
-    }
-  }
+  measureKinematics(in_object, channel_info, motion_model_);
+  updateShapeState(in_object);
 
-  // update pose
-  measureWithPose(updating_object, channel_info);
-
-  // remove cached object
   removeCache();
-
-  // reset anchor point for shape updates
   shape_update_anchor_ = BicycleMotionModel::LengthUpdateAnchor::CENTER;
 
   return true;
@@ -333,22 +343,9 @@ bool VehicleTracker::conditionedUpdate(
   // Use motion model's pose covariance for anchor point uncertainty
   std::array<double, 36> pose_cov = measurement.pose_covariance;
 
-  bool is_updated = false;
-  if (strategy.type == UpdateStrategyType::FRONT_WHEEL_UPDATE) {
-    shape_update_anchor_ = BicycleMotionModel::LengthUpdateAnchor::FRONT;
-
-    is_updated = motion_model_.updateStatePoseFront(
-      strategy.anchor_point.x, strategy.anchor_point.y, pose_cov);
-  } else {
-    // Must be REAR_WHEEL_UPDATE (only remaining option after WEAK_UPDATE check)
-    shape_update_anchor_ = BicycleMotionModel::LengthUpdateAnchor::REAR;
-
-    is_updated =
-      motion_model_.updateStatePoseRear(strategy.anchor_point.x, strategy.anchor_point.y, pose_cov);
-  }
-
+  const bool is_updated =
+    applyConditionedUpdate(strategy, pose_cov, motion_model_, shape_update_anchor_);
   removeCache();
-
   return is_updated;
 }
 
@@ -472,20 +469,10 @@ geometry_msgs::msg::Point VehicleTracker::calculateAnchorPoint(
 
 void VehicleTracker::setObjectShape(const autoware_perception_msgs::msg::Shape & shape)
 {
-  // Update object shape and area (base functionality)
   object_.shape = shape;
   object_.area = types::getArea(shape);
-
-  // For vehicle trackers, update bicycle model wheel positions to maintain consistency
-  // with the new bbox shape length
   if (shape.type == autoware_perception_msgs::msg::Shape::BOUNDING_BOX) {
-    const double new_length = shape.dimensions.x;
-
-    // Use stored anchor point from last update strategy
-    motion_model_.updateStateLength(new_length, shape_update_anchor_);
-
-    // Reset to default (CENTER) after applying the shape update
-    shape_update_anchor_ = BicycleMotionModel::LengthUpdateAnchor::CENTER;
+    updateModelLength(shape.dimensions.x, motion_model_, shape_update_anchor_);
   }
 }
 

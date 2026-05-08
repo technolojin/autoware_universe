@@ -45,10 +45,26 @@ protected:
   using IDX = BicycleMotionModel::IDX;
   BicycleMotionModel::LengthUpdateAnchor shape_update_anchor_;
 
-  // Kinematic-only model update (no shape side effects); for subclasses managing secondary models
+  // Kinematic-only Kalman update for any model (no shape side effects)
   bool updateKinematics(
     const types::DynamicObject & object, const types::InputChannel & channel_info,
     BicycleMotionModel & model);
+
+  // Yaw-flip correction + kinematic update for any model
+  bool measureKinematics(
+    const types::DynamicObject & in_object, const types::InputChannel & channel_info,
+    BicycleMotionModel & model);
+
+  // Front/rear wheel conditioned update for any model; sets anchor accordingly
+  bool applyConditionedUpdate(
+    const UpdateStrategy & strategy, const std::array<double, 36> & pose_cov,
+    BicycleMotionModel & model, BicycleMotionModel::LengthUpdateAnchor & anchor);
+
+  // Update wheel positions to a new length and reset the anchor
+  void updateModelLength(
+    double new_length, BicycleMotionModel & model,
+    BicycleMotionModel::LengthUpdateAnchor & anchor);
+
   void applyVelocitySuppression(types::DynamicObject & object) const;
 
 public:
@@ -100,6 +116,9 @@ private:
     const EdgePositions & meas_edges, const types::DynamicObject & prediction) const;
   geometry_msgs::msg::Point calculateAnchorPoint(
     const EdgeAlignment & alignment, const types::DynamicObject & measurement) const;
+
+  // Z and shape dimension update from measurement (no kinematic state change)
+  void updateShapeState(const types::DynamicObject & object);
 };
 
 }  // namespace autoware::multi_object_tracker
