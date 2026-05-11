@@ -1,14 +1,11 @@
 autoware_system_design_format: 0.3.0
-
 name: CollisionDetector.node
 package:
   name: autoware_collision_detector
   provider: autoware
 launch:
   plugin: autoware::collision_detector::CollisionDetectorNode
-  executable: collision_detector_node
-  use_container: true
-  container_name: control_check_container
+  executable: autoware_collision_detector_node
 subscribers:
   - name: odometry
     message_type: nav_msgs/msg/Odometry

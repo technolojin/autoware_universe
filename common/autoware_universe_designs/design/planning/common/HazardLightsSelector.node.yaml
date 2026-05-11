@@ -1,5 +1,4 @@
 autoware_system_design_format: 0.3.0
-
 name: HazardLightsSelector.node
 package:
   name: autoware_hazard_lights_selector
@@ -7,7 +6,6 @@ package:
 launch:
   plugin: autoware::hazard_lights_selector::HazardLightsSelectorNode
   executable: autoware_hazard_lights_selector_node
-  use_container: false
 subscribers:
   - name: lane_driving_hazard_lights_cmd
     message_type: autoware_vehicle_msgs/msg/HazardLightsCommand

@@ -1,5 +1,4 @@
 autoware_system_design_format: 0.3.0
-
 name: ExternalVelocityLimitSelector.node
 package:
   name: autoware_external_velocity_limit_selector
@@ -7,7 +6,6 @@ package:
 launch:
   plugin: autoware::external_velocity_limit_selector::ExternalVelocityLimitSelectorNode
   executable: external_velocity_limit_selector
-  use_container: false # Launched via include in snippet
 subscribers:
   - name: api_limit
     message_type: tier4_planning_msgs/msg/VelocityLimit

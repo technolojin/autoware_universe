@@ -1,13 +1,11 @@
 autoware_system_design_format: 0.3.0
-
 name: TrajectoryFollower.node
 package:
   name: autoware_trajectory_follower_node
   provider: autoware
 launch:
   plugin: autoware::motion::control::trajectory_follower_node::Controller
-  use_container: true
-  container_name: control_container
+  executable: controller_node_exe
 subscribers:
   - name: reference_trajectory
     message_type: autoware_planning_msgs/msg/Trajectory

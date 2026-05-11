@@ -1,5 +1,4 @@
 autoware_system_design_format: 0.3.0
-
 name: PathSampler.node
 package:
   name: autoware_path_sampler
@@ -7,8 +6,6 @@ package:
 launch:
   plugin: autoware::path_sampler::PathSampler
   executable: path_sampler_exe
-  use_container: true
-  container_name: motion_planning_container
 subscribers:
   - name: path
     message_type: autoware_planning_msgs/msg/Path

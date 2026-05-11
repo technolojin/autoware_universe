@@ -1,5 +1,4 @@
 autoware_system_design_format: 0.3.0
-
 name: PredictedPathChecker.node
 package:
   name: autoware_predicted_path_checker
@@ -7,8 +6,6 @@ package:
 launch:
   plugin: autoware::predicted_path_checker::PredictedPathCheckerNode
   executable: predicted_path_checker_node
-  use_container: true
-  container_name: control_check_container
 subscribers:
   - name: objects
     message_type: autoware_perception_msgs/msg/PredictedObjects

@@ -1,5 +1,4 @@
 autoware_system_design_format: 0.3.0
-
 name: MissionPlanner.node
 package:
   name: autoware_mission_planner_universe

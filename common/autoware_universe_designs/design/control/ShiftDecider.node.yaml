@@ -1,14 +1,11 @@
 autoware_system_design_format: 0.3.0
-
 name: ShiftDecider.node
 package:
   name: autoware_shift_decider
   provider: autoware
 launch:
   plugin: autoware::shift_decider::ShiftDecider
-  executable: shift_decider_node
-  use_container: true
-  container_name: control_container
+  executable: autoware_shift_decider
 subscribers:
   - name: control_cmd
     message_type: autoware_control_msgs/msg/Control

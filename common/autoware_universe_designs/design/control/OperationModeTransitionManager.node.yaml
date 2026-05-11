@@ -1,14 +1,11 @@
 autoware_system_design_format: 0.3.0
-
 name: OperationModeTransitionManager.node
 package:
   name: autoware_operation_mode_transition_manager
   provider: autoware
 launch:
   plugin: autoware::operation_mode_transition_manager::OperationModeTransitionManager
-  executable: operation_mode_transition_manager_node
-  use_container: true
-  container_name: control_container
+  executable: autoware_operation_mode_transition_manager_exe
 subscribers:
   - name: kinematics
     message_type: nav_msgs/msg/Odometry
@@ -28,7 +25,6 @@ subscribers:
   - name: engage
     message_type: autoware_vehicle_msgs/msg/Engage
     global: /autoware/engage
-
 publishers:
   - name: operation_mode
     message_type: autoware_adapi_v1_msgs/msg/OperationModeState

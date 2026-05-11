@@ -1,14 +1,11 @@
 autoware_system_design_format: 0.3.0
-
 name: ElasticBandSmoother.node
 package:
   name: autoware_path_smoother
   provider: autoware
 launch:
   plugin: autoware::path_smoother::ElasticBandSmoother
-  executable: elastic_band_smoother # Placeholder
-  use_container: true
-  container_name: motion_planning_container
+  executable: elastic_band_smoother
 subscribers:
   - name: path
     message_type: autoware_planning_msgs/msg/Path

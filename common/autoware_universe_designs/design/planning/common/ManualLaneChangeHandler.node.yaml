@@ -1,14 +1,11 @@
 autoware_system_design_format: 0.3.0
-
 name: ManualLaneChangeHandler.node
 package:
   name: autoware_manual_lane_change_handler
   provider: autoware
 launch:
   plugin: autoware::manual_lane_change_handler::ManualLaneChangeHandler
-  executable: manual_lane_change_handler_node
-  use_container: true
-  container_name: planning_container
+  executable: autoware_manual_lane_change_handler_node
 subscribers:
   - name: route
     message_type: autoware_planning_msgs/msg/LaneletRoute

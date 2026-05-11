@@ -1,39 +1,23 @@
 autoware_system_design_format: 0.3.0
-
 name: MissionPlanning.module
 instances:
-  - name: mission_planning_container
-    entity: MissionPlanningContainer.node
   - name: mission_planner
     entity: MissionPlanner.node
-    launch:
-      use_container: true
-      container_name: mission_planner_container
   - name: route_selector
     entity: RouteSelector.node
-    launch:
-      use_container: true
-      container_name: mission_planner_container
   - name: goal_pose_visualizer
     entity: GoalPoseVisualizer.node
-    launch:
-      use_container: true
-      container_name: mission_planner_container
-
 subscribers:
   - name: vector_map
   - name: modified_goal
   - name: odometry
   - name: operation_mode_state
   - name: reroute_availability
-
 publishers:
   - name: route
   - name: state
   - name: route_marker
-
 connections:
-  # Inputs -> Mission Planner
   - - subscriber.modified_goal
     - mission_planner.subscriber.modified_goal
   - - subscriber.vector_map
@@ -44,13 +28,10 @@ connections:
     - mission_planner.subscriber.operation_mode_state
   - - subscriber.reroute_availability
     - mission_planner.subscriber.reroute_availability
-  # Mission Planner -> Route Selector
   - - mission_planner.publisher.route
     - route_selector.subscriber.planner_route
   - - mission_planner.publisher.state
     - route_selector.subscriber.planner_state
-
-  # Route Selector outputs
   - - route_selector.publisher.route
     - goal_pose_visualizer.subscriber.route
   - - route_selector.publisher.route

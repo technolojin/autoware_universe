@@ -1,5 +1,4 @@
 autoware_system_design_format: 0.3.0
-
 name: ControlCommandGate.node
 package:
   name: autoware_control_command_gate

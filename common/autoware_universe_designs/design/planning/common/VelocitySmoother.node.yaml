@@ -1,5 +1,4 @@
 autoware_system_design_format: 0.3.0
-
 name: VelocitySmoother.node
 package:
   name: autoware_velocity_smoother
@@ -7,8 +6,6 @@ package:
 launch:
   plugin: autoware::velocity_smoother::VelocitySmootherNode
   executable: velocity_smoother_node
-  use_container: true
-  container_name: velocity_smoother_container
 subscribers:
   - name: trajectory
     message_type: autoware_planning_msgs/msg/Trajectory

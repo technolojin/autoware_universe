@@ -1,14 +1,11 @@
 autoware_system_design_format: 0.3.0
-
 name: AutonomousEmergencyBraking.node
 package:
   name: autoware_autonomous_emergency_braking
   provider: autoware
 launch:
   plugin: autoware::motion::control::autonomous_emergency_braking::AEB
-  executable: autonomous_emergency_braking_node
-  use_container: true
-  container_name: control_check_container
+  executable: autoware_autonomous_emergency_braking
 subscribers:
   - name: pointcloud
     message_type: sensor_msgs/msg/PointCloud2

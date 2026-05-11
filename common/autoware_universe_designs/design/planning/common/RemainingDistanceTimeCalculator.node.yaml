@@ -1,14 +1,11 @@
 autoware_system_design_format: 0.3.0
-
 name: RemainingDistanceTimeCalculator.node
 package:
   name: autoware_remaining_distance_time_calculator
   provider: autoware
 launch:
   plugin: autoware::remaining_distance_time_calculator::RemainingDistanceTimeCalculatorNode
-  executable: remaining_distance_time_calculator_node
-  use_container: true
-  container_name: planning_container
+  executable: autoware_remaining_distance_time_calculator_node
 subscribers:
   - name: mission_route
     message_type: autoware_planning_msgs/msg/LaneletRoute

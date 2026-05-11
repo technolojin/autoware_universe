@@ -1,14 +1,11 @@
 autoware_system_design_format: 0.3.0
-
 name: ControlValidator.node
 package:
   name: autoware_control_validator
   provider: autoware
 launch:
   plugin: autoware::control_validator::ControlValidator
-  executable: control_validator_node
-  use_container: true
-  container_name: control_check_container
+  executable: autoware_control_validator_node
 subscribers:
   - name: control_cmd
     message_type: autoware_control_msgs/msg/Control

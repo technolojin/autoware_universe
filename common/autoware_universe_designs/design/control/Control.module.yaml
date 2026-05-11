@@ -1,93 +1,45 @@
 autoware_system_design_format: 0.3.0
-
 name: Control.module
 instances:
-  - name: control_container
-    entity: ControlContainer.node
   - name: trajectory_follower
     entity: TrajectoryFollower.node
-    launch:
-      use_container: true
-      container_name: control_container
   - name: shift_decider
     entity: ShiftDecider.node
-    launch:
-      use_container: true
-      container_name: control_container
   - name: vehicle_cmd_gate
     entity: VehicleCmdGate.node
-    launch:
-      use_container: true
-      container_name: control_container
   - name: operation_mode_transition_manager
     entity: OperationModeTransitionManager.node
-    launch:
-      use_container: true
-      container_name: control_container
   - name: external_cmd_selector
     entity: ExternalCmdSelector.node
-    launch:
-      use_container: true
-      container_name: control_container
   - name: external_cmd_converter
     entity: ExternalCmdConverter.node
-    launch:
-      use_container: true
-      container_name: control_container
   - name: lane_departure_checker
     entity: LaneDepartureChecker.node
-    launch:
-      use_container: true
-      container_name: control_container
   - name: control_validator
     entity: ControlValidator.node
-    launch:
-      use_container: true
-      container_name: control_container
   - name: autonomous_emergency_braking
     entity: AutonomousEmergencyBraking.node
-    launch:
-      use_container: true
-      container_name: control_container
   - name: collision_detector
     entity: CollisionDetector.node
-    launch:
-      use_container: true
-      container_name: control_container
   - name: control_evaluator
     entity: ControlEvaluator.node
-    launch:
-      use_container: true
-      container_name: control_container
-
 subscribers:
-  # Trajectory & Map
   - name: trajectory
   - name: route
   - name: vector_map
-
-  # Vehicle State
   - name: odometry
   - name: acceleration
   - name: steering_status
   - name: gear_status
   - name: velocity_status
   - name: imu
-
-  # System & Operation
   - name: operation_mode_state
   - name: autoware_state
   - name: mrm_state
-
-  # Perception
   - name: objects
   - name: pointcloud
-
-  # Planning Commands
   - name: turn_indicators_cmd
   - name: hazard_lights_cmd
-
-  # External Overrides
   - name: remote_pedals_cmd
   - name: remote_steering_cmd
   - name: remote_gear_cmd
@@ -100,25 +52,17 @@ subscribers:
   - name: local_turn_indicators_cmd
   - name: local_hazard_lights_cmd
   - name: local_heartbeat
-
 publishers:
-  # Actuation
   - name: control_cmd
   - name: gear_cmd
   - name: turn_indicators_cmd
   - name: hazard_lights_cmd
-
-  # Status
   - name: control_mode
   - name: gate_mode
   - name: is_autonomous_available
   - name: diagnostic
   - name: control_evaluation
-
 connections:
-  # ==========================================
-  # 1. Trajectory Following Loop
-  # ==========================================
   - - subscriber.trajectory
     - trajectory_follower.subscriber.reference_trajectory
   - - subscriber.odometry
@@ -129,20 +73,12 @@ connections:
     - trajectory_follower.subscriber.current_accel
   - - subscriber.operation_mode_state
     - trajectory_follower.subscriber.current_operation_mode
-
-  # ==========================================
-  # 2. Shift Logic
-  # ==========================================
   - - trajectory_follower.publisher.control_cmd
     - shift_decider.subscriber.control_cmd
   - - subscriber.gear_status
     - shift_decider.subscriber.current_gear
   - - subscriber.autoware_state
     - shift_decider.subscriber.state
-
-  # ==========================================
-  # 3. External Command Pipeline
-  # ==========================================
   - - subscriber.remote_pedals_cmd
     - external_cmd_selector.subscriber.remote_pedals_cmd
   - - subscriber.remote_gear_cmd
@@ -155,11 +91,6 @@ connections:
     - external_cmd_selector.subscriber.remote_hazard_lights_cmd
   - - subscriber.remote_heartbeat
     - external_cmd_selector.subscriber.remote_heartbeat
-
-  # ==========================================
-  # 4. Command Gating (Arbitration)
-  # ==========================================
-  # Auto Inputs
   - - trajectory_follower.publisher.control_cmd
     - vehicle_cmd_gate.subscriber.auto_control_cmd
   - - shift_decider.publisher.gear_cmd
@@ -168,22 +99,14 @@ connections:
     - vehicle_cmd_gate.subscriber.auto_turn_indicators_cmd
   - - subscriber.hazard_lights_cmd
     - vehicle_cmd_gate.subscriber.auto_hazard_lights_cmd
-
-  # External Inputs
   - - external_cmd_converter.publisher.control_cmd
     - vehicle_cmd_gate.subscriber.external_control_cmd
-
-  # System Inputs
   - - subscriber.operation_mode_state
     - vehicle_cmd_gate.subscriber.operation_mode
   - - subscriber.mrm_state
     - vehicle_cmd_gate.subscriber.mrm_state
   - - subscriber.odometry
     - vehicle_cmd_gate.subscriber.kinematics
-
-  # ==========================================
-  # 5. Operation Mode Manager
-  # ==========================================
   - - subscriber.trajectory
     - operation_mode_transition_manager.subscriber.trajectory
   - - trajectory_follower.publisher.control_cmd
@@ -192,11 +115,6 @@ connections:
     - operation_mode_transition_manager.subscriber.control_cmd
   - - subscriber.steering_status
     - operation_mode_transition_manager.subscriber.steering
-
-  # ==========================================
-  # 6. Safety Checks & Evaluator
-  # ==========================================
-  # Lane Departure
   - - subscriber.odometry
     - lane_departure_checker.subscriber.odometry
   - - subscriber.vector_map
@@ -205,8 +123,6 @@ connections:
     - lane_departure_checker.subscriber.route
   - - subscriber.trajectory
     - lane_departure_checker.subscriber.reference_trajectory
-
-  # AEB
   - - subscriber.pointcloud
     - autonomous_emergency_braking.subscriber.pointcloud
   - - subscriber.objects
@@ -217,8 +133,6 @@ connections:
     - autonomous_emergency_braking.subscriber.imu
   - - trajectory_follower.publisher.predicted_trajectory
     - autonomous_emergency_braking.subscriber.predicted_trajectory
-
-  # Evaluator
   - - subscriber.trajectory
     - control_evaluator.subscriber.trajectory
   - - subscriber.odometry
@@ -227,10 +141,6 @@ connections:
     - control_evaluator.subscriber.acceleration
   - - subscriber.steering_status
     - control_evaluator.subscriber.steering_status
-
-  # ==========================================
-  # 7. Global Outputs
-  # ==========================================
   - - vehicle_cmd_gate.publisher.command/control_cmd
     - publisher.control_cmd
   - - vehicle_cmd_gate.publisher.gear_cmd

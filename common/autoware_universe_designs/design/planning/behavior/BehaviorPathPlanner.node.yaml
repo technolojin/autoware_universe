@@ -1,14 +1,11 @@
 autoware_system_design_format: 0.3.0
-
 name: BehaviorPathPlanner.node
 package:
   name: autoware_behavior_path_planner
   provider: autoware
 launch:
   plugin: autoware::behavior_path_planner::BehaviorPathPlannerNode
-  executable: behavior_path_planner_node
-  use_container: true
-  container_name: behavior_planning_container
+  executable: autoware_behavior_path_planner_node
 subscribers:
   - name: route
     message_type: autoware_planning_msgs/msg/LaneletRoute

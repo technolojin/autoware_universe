@@ -1,16 +1,12 @@
 autoware_system_design_format: 0.3.0
-
 name: ExternalCmdSelector.node
 package:
   name: autoware_external_cmd_selector
   provider: autoware
 launch:
   plugin: autoware::external_cmd_selector::ExternalCmdSelector
-  executable: external_cmd_selector_node
-  use_container: true
-  container_name: target_container
+  executable: autoware_external_cmd_selector
 subscribers:
-  # Local Source Inputs
   - name: local_pedals_cmd
     message_type: autoware_vehicle_msgs/msg/ActuationCommandStamped
   - name: local_steering_cmd
@@ -23,8 +19,6 @@ subscribers:
     message_type: autoware_vehicle_msgs/msg/HazardLightsCommand
   - name: local_heartbeat
     message_type: tier4_external_api_msgs/msg/Heartbeat
-
-  # Remote Source Inputs
   - name: remote_pedals_cmd
     message_type: autoware_vehicle_msgs/msg/ActuationCommandStamped
   - name: remote_steering_cmd
@@ -37,9 +31,7 @@ subscribers:
     message_type: autoware_vehicle_msgs/msg/HazardLightsCommand
   - name: remote_heartbeat
     message_type: tier4_external_api_msgs/msg/Heartbeat
-
 publishers:
-  # Selected Command Outputs
   - name: pedals_cmd
     message_type: autoware_vehicle_msgs/msg/ActuationCommandStamped
   - name: steering_cmd

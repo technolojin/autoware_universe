@@ -1,5 +1,4 @@
 autoware_system_design_format: 0.3.0
-
 name: MotionVelocityPlanner.node
 package:
   name: autoware_motion_velocity_planner
@@ -7,8 +6,6 @@ package:
 launch:
   plugin: autoware::motion_velocity_planner::MotionVelocityPlannerNode
   executable: autoware_motion_velocity_planner_node
-  use_container: true
-  container_name: motion_planning_container
 subscribers:
   - name: trajectory
     message_type: autoware_planning_msgs/msg/Trajectory

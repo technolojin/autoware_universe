@@ -1,14 +1,11 @@
 autoware_system_design_format: 0.3.0
-
 name: PlanningValidator.node
 package:
   name: autoware_planning_validator
   provider: autoware
 launch:
   plugin: autoware::planning_validator::PlanningValidator
-  executable: planning_validator_node
-  use_container: true
-  container_name: planning_container
+  executable: autoware_planning_validator_node
 subscribers:
   - name: trajectory
     message_type: autoware_planning_msgs/msg/Trajectory
