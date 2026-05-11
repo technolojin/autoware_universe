@@ -22,7 +22,9 @@ publishers:
     message_type: std_msgs/msg/Bool
 param_files:
   - name: obstacle_collision_checker_param
-    default: $(find-pkg-share autoware_obstacle_collision_checker)/config/obstacle_collision_checker.param.yaml
+    default: $(find-pkg-share autoware_launch)/config/control/obstacle_collision_checker/obstacle_collision_checker.param.yaml
+  - name: vehicle_param
+    default: $(find-pkg-share autoware_launch)/config/vehicle_info.param.yaml
 param_values: []
 processes:
   - name: check_obstacle

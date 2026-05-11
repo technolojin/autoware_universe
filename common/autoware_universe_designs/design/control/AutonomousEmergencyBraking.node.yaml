@@ -22,8 +22,11 @@ publishers:
     message_type: visualization_msgs/msg/MarkerArray
 param_files:
   - name: aeb_param
-    default: $(find-pkg-share autoware_autonomous_emergency_braking)/config/autonomous_emergency_braking.param.yaml
-param_values: []
+    default: $(find-pkg-share autoware_launch)/config/control/autoware_autonomous_emergency_braking/autonomous_emergency_braking.param.yaml
+param_values:
+  - name: check_autoware_state
+    type: bool
+    default: true
 processes:
   - name: check_collision
     trigger_conditions:

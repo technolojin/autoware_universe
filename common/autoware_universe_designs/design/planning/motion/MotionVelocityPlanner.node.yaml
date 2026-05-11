@@ -42,19 +42,44 @@ param_values:
     default:
       - autoware::motion_velocity_planner::ObstacleStopModule
       - autoware::motion_velocity_planner::ObstacleSlowDownModule
+      - autoware::motion_velocity_planner::ObstacleCruiseModule
+      - autoware::motion_velocity_planner::OutOfLaneModule
+      - autoware::motion_velocity_planner::ObstacleVelocityLimiterModule
+      - autoware::motion_velocity_planner::DynamicObstacleStopModule
+      - autoware::motion_velocity_planner::RunOutModule
+      - autoware::motion_velocity_planner::experimental::BoundaryDeparturePreventionModule
+      - autoware::motion_velocity_planner::RoadUserStopModule
 param_files:
+  - name: common_param
+    default: $(find-pkg-share autoware_launch)/config/planning/scenario_planning/common/common.param.yaml
+  - name: vehicle_param
+    default: $(find-pkg-share autoware_launch)/config/vehicle_info.param.yaml
+  - name: nearest_search_param
+    default: $(find-pkg-share autoware_launch)/config/planning/scenario_planning/common/nearest_search.param.yaml
+  - name: velocity_smoother_param
+    default: $(find-pkg-share autoware_launch)/config/planning/scenario_planning/common/autoware_velocity_smoother/velocity_smoother.param.yaml
+  - name: motion_velocity_planner_velocity_smoother_type_param
+    default: $(find-pkg-share autoware_launch)/config/planning/scenario_planning/common/autoware_velocity_smoother/Analytical.param.yaml
   - name: motion_velocity_planner_param
-    default: $(find-pkg-share autoware_motion_velocity_planner)/config/motion_velocity_planner.param.yaml
+    default: $(find-pkg-share autoware_launch)/config/planning/scenario_planning/lane_driving/motion_planning/motion_velocity_planner/motion_velocity_planner.param.yaml
   - name: obstacle_stop_module_param
-    default: $(find-pkg-share autoware_motion_velocity_obstacle_stop_module)/config/obstacle_stop_module.param.yaml
+    default: $(find-pkg-share autoware_launch)/config/planning/scenario_planning/lane_driving/motion_planning/motion_velocity_planner/obstacle_stop.param.yaml
   - name: obstacle_slow_down_module_param
-    default: $(find-pkg-share autoware_motion_velocity_obstacle_slow_down_module)/config/obstacle_slow_down_module.param.yaml
+    default: $(find-pkg-share autoware_launch)/config/planning/scenario_planning/lane_driving/motion_planning/motion_velocity_planner/obstacle_slow_down.param.yaml
   - name: obstacle_cruise_module_param
-    default: $(find-pkg-share autoware_motion_velocity_obstacle_cruise_module)/config/obstacle_cruise_module.param.yaml
-  - name: run_out_module_param
-    default: $(find-pkg-share autoware_motion_velocity_run_out_module)/config/run_out_module.param.yaml
+    default: $(find-pkg-share autoware_launch)/config/planning/scenario_planning/lane_driving/motion_planning/motion_velocity_planner/obstacle_cruise.param.yaml
+  - name: dynamic_obstacle_stop_module_param
+    default: $(find-pkg-share autoware_launch)/config/planning/scenario_planning/lane_driving/motion_planning/motion_velocity_planner/dynamic_obstacle_stop.param.yaml
   - name: out_of_lane_module_param
-    default: $(find-pkg-share autoware_motion_velocity_out_of_lane_module)/config/out_of_lane_module.param.yaml
+    default: $(find-pkg-share autoware_launch)/config/planning/scenario_planning/lane_driving/motion_planning/motion_velocity_planner/out_of_lane.param.yaml
+  - name: obstacle_velocity_limiter_param
+    default: $(find-pkg-share autoware_launch)/config/planning/scenario_planning/lane_driving/motion_planning/motion_velocity_planner/obstacle_velocity_limiter.param.yaml
+  - name: run_out_module_param
+    default: $(find-pkg-share autoware_launch)/config/planning/scenario_planning/lane_driving/motion_planning/motion_velocity_planner/run_out.param.yaml
+  - name: boundary_departure_prevention_module_param
+    default: $(find-pkg-share autoware_launch)/config/planning/scenario_planning/lane_driving/motion_planning/motion_velocity_planner/boundary_departure_prevention.param.yaml
+  - name: road_user_stop_module_param
+    default: $(find-pkg-share autoware_launch)/config/planning/scenario_planning/lane_driving/motion_planning/motion_velocity_planner/road_user_stop.param.yaml
 processes:
   - name: plan_velocity
     trigger_conditions:

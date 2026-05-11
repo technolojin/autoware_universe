@@ -18,16 +18,23 @@ publishers:
     message_type: autoware_planning_msgs/msg/Trajectory
 param_files:
   - name: planning_validator_param
-    default: $(find-pkg-share autoware_planning_validator)/config/planning_validator.param.yaml
+    default: $(find-pkg-share autoware_launch)/config/planning/scenario_planning/common/planning_validator/planning_validator.param.yaml
   - name: latency_checker_param
-    default: $(find-pkg-share autoware_planning_validator)/config/planning_validator_latency_checker.param.yaml
+    default: $(find-pkg-share autoware_launch)/config/planning/scenario_planning/common/planning_validator/latency_checker.param.yaml
   - name: trajectory_checker_param
-    default: $(find-pkg-share autoware_planning_validator)/config/planning_validator_trajectory_checker.param.yaml
+    default: $(find-pkg-share autoware_launch)/config/planning/scenario_planning/common/planning_validator/trajectory_checker.param.yaml
   - name: intersection_collision_checker_param
-    default: $(find-pkg-share autoware_planning_validator)/config/planning_validator_intersection_collision_checker.param.yaml
+    default: $(find-pkg-share autoware_launch)/config/planning/scenario_planning/common/planning_validator/intersection_collision_checker.param.yaml
   - name: rear_collision_checker_param
-    default: $(find-pkg-share autoware_planning_validator)/config/planning_validator_rear_collision_checker.param.yaml
-param_values: []
+    default: $(find-pkg-share autoware_launch)/config/planning/scenario_planning/common/planning_validator/rear_collision_checker.param.yaml
+param_values:
+  - name: launch_modules
+    type: string_array
+    default:
+      - autoware::planning_validator::LatencyChecker
+      - autoware::planning_validator::TrajectoryChecker
+      - autoware::planning_validator::IntersectionCollisionChecker
+      - autoware::planning_validator::RearCollisionChecker
 processes:
   - name: validate_trajectory
     trigger_conditions:

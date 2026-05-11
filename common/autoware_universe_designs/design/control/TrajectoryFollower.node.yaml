@@ -31,15 +31,23 @@ publishers:
   - name: control_cmd
     message_type: autoware_control_msgs/msg/Control
 param_files:
+  - name: nearest_search_param
+    default: $(find-pkg-share autoware_launch)/config/control/common/nearest_search.param.yaml
   - name: trajectory_follower_node_param
-    default: $(find-pkg-share autoware_trajectory_follower_node)/config/trajectory_follower_node.param.yaml
+    default: $(find-pkg-share autoware_launch)/config/control/trajectory_follower/trajectory_follower_node.param.yaml
   - name: lat_controller_param
-    default: $(find-pkg-share autoware_trajectory_follower_node)/config/lateral_controller.param.yaml
+    default: $(find-pkg-share autoware_launch)/config/control/trajectory_follower/lateral/mpc.param.yaml
   - name: lon_controller_param
-    default: $(find-pkg-share autoware_trajectory_follower_node)/config/longitudinal_controller.param.yaml
+    default: $(find-pkg-share autoware_launch)/config/control/trajectory_follower/longitudinal/pid.param.yaml
   - name: vehicle_param
-    default: $(find-pkg-share autoware_vehicle_info_utils)/config/vehicle_info.param.yaml
-param_values: []
+    default: $(find-pkg-share autoware_launch)/config/vehicle_info.param.yaml
+param_values:
+  - name: lateral_controller_mode
+    type: string
+    default: mpc
+  - name: longitudinal_controller_mode
+    type: string
+    default: pid
 processes:
   - name: follow_trajectory
     trigger_conditions:

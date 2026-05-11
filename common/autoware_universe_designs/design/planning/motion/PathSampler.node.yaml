@@ -17,8 +17,14 @@ publishers:
   - name: trajectory
     message_type: autoware_planning_msgs/msg/Trajectory
 param_files:
+  - name: common_param
+    default: $(find-pkg-share autoware_launch)/config/planning/scenario_planning/common/common.param.yaml
+  - name: vehicle_param
+    default: $(find-pkg-share autoware_launch)/config/vehicle_info.param.yaml
+  - name: nearest_search_param
+    default: $(find-pkg-share autoware_launch)/config/planning/scenario_planning/common/nearest_search.param.yaml
   - name: path_sampler_param
-    default: $(find-pkg-share autoware_path_sampler)/config/path_sampler.param.yaml
+    default: $(find-pkg-share autoware_launch)/config/planning/scenario_planning/lane_driving/motion_planning/path_sampler/path_sampler.param.yaml
 param_values: []
 processes:
   - name: sample_path

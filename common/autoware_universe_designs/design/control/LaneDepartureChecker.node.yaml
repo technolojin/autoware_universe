@@ -21,8 +21,12 @@ publishers:
   - name: diagnostic
     message_type: diagnostic_msgs/msg/DiagnosticStatus
 param_files:
+  - name: nearest_search_param
+    default: $(find-pkg-share autoware_launch)/config/control/common/nearest_search.param.yaml
   - name: lane_departure_checker_param
-    default: $(find-pkg-share autoware_lane_departure_checker)/config/lane_departure_checker.param.yaml
+    default: $(find-pkg-share autoware_launch)/config/control/lane_departure_checker/lane_departure_checker.param.yaml
+  - name: vehicle_param
+    default: $(find-pkg-share autoware_launch)/config/vehicle_info.param.yaml
 param_values: []
 processes:
   - name: check_departure

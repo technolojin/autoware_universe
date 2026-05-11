@@ -73,8 +73,13 @@ publishers:
 
 param_files:
   - name: vehicle_cmd_gate_param
-    default: $(find-pkg-share autoware_vehicle_cmd_gate)/config/vehicle_cmd_gate.param.yaml
-param_values: []
+    default: $(find-pkg-share autoware_launch)/config/control/vehicle_cmd_gate/vehicle_cmd_gate.param.yaml
+  - name: vehicle_param
+    default: $(find-pkg-share autoware_launch)/config/vehicle_info.param.yaml
+param_values:
+  - name: check_external_emergency_heartbeat
+    type: bool
+    default: true
 processes:
   - name: gate_commands
     trigger_conditions:

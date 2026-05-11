@@ -22,9 +22,9 @@ publishers:
     message_type: std_msgs/msg/Bool
 param_files:
   - name: freespace_planner_param
-    default: $(find-pkg-share autoware_freespace_planner)/config/freespace_planner.param.yaml
+    default: $(find-pkg-share autoware_launch)/config/planning/scenario_planning/parking/freespace_planner/freespace_planner.param.yaml
   - name: vehicle_param
-    default: $(find-pkg-share autoware_vehicle_info_utils)/config/vehicle_info.param.yaml
+    default: $(find-pkg-share autoware_launch)/config/vehicle_info.param.yaml
 param_values: []
 processes:
   - name: plan_freespace

@@ -18,7 +18,9 @@ publishers:
     message_type: tier4_debug_msgs/msg/Float32Stamped
   - name: mission_remaining_time
     message_type: tier4_debug_msgs/msg/Float32Stamped
-param_files: []
+param_files:
+  - name: remaining_distance_time_calculator_param
+    default: $(find-pkg-share autoware_remaining_distance_time_calculator)/config/remaining_distance_time_calculator.param.yaml
 param_values: []
 processes:
   - name: calculate_metrics

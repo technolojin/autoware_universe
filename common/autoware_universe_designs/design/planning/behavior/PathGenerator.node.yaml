@@ -22,7 +22,7 @@ publishers:
     message_type: autoware_vehicle_msgs/msg/HazardLightsCommand
 param_files:
   - name: path_generator_param
-    default: $(find-pkg-share autoware_path_generator)/config/path_generator.param.yaml
+    default: $(find-pkg-share autoware_launch)/config/planning/scenario_planning/lane_driving/behavior_planning/path_generator/path_generator.param.yaml
 param_values: []
 processes:
   - name: generate_path

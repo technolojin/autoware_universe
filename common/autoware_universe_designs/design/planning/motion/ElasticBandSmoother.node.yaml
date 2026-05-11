@@ -16,13 +16,13 @@ publishers:
     message_type: autoware_planning_msgs/msg/Path
 param_files:
   - name: common_param
-    default: $(find-pkg-share autoware_planning_common)/config/common.param.yaml
+    default: $(find-pkg-share autoware_launch)/config/planning/scenario_planning/common/common.param.yaml
   - name: nearest_search_param
-    default: $(find-pkg-share autoware_planning_common)/config/nearest_search.param.yaml
+    default: $(find-pkg-share autoware_launch)/config/planning/scenario_planning/common/nearest_search.param.yaml
   - name: vehicle_param
-    default: $(find-pkg-share autoware_vehicle_info_utils)/config/vehicle_info.param.yaml
+    default: $(find-pkg-share autoware_launch)/config/vehicle_info.param.yaml
   - name: elastic_band_smoother_param
-    default: $(find-pkg-share autoware_path_smoother)/config/elastic_band_smoother.param.yaml
+    default: $(find-pkg-share autoware_launch)/config/planning/scenario_planning/lane_driving/motion_planning/path_smoother/elastic_band_smoother.param.yaml
 param_values: []
 processes:
   - name: smooth_path

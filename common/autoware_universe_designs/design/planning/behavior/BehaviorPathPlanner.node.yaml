@@ -40,19 +40,53 @@ param_values:
   - name: launch_modules
     type: string_array
     default:
+      - autoware::behavior_path_planner::StaticObstacleAvoidanceModuleManager
+      - autoware::behavior_path_planner::DynamicObstacleAvoidanceModuleManager
+      - autoware::behavior_path_planner::SideShiftModuleManager
+      - autoware::behavior_path_planner::BidirectionalTrafficModuleManager
+      - autoware::behavior_path_planner::StartPlannerModuleManager
+      - autoware::behavior_path_planner::SamplingPlannerModuleManager
+      - autoware::behavior_path_planner::GoalPlannerModuleManager
       - autoware::behavior_path_planner::LaneChangeRightModuleManager
       - autoware::behavior_path_planner::LaneChangeLeftModuleManager
-      - autoware::behavior_path_planner::StaticObstacleAvoidanceModuleManager
-      - autoware::behavior_path_planner::GoalPlannerModuleManager
+      - autoware::behavior_path_planner::AvoidanceByLaneChangeModuleManager
+  - name: enable_all_modules_auto_mode
+    type: bool
+    default: false
+  - name: is_simulation
+    type: bool
+    default: false
 param_files:
+  - name: common_param
+    default: $(find-pkg-share autoware_launch)/config/planning/scenario_planning/common/common.param.yaml
+  - name: vehicle_param
+    default: $(find-pkg-share autoware_launch)/config/vehicle_info.param.yaml
+  - name: nearest_search_param
+    default: $(find-pkg-share autoware_launch)/config/planning/scenario_planning/common/nearest_search.param.yaml
   - name: behavior_path_planner_param
-    default: $(find-pkg-share autoware_behavior_path_planner)/config/behavior_path_planner.param.yaml
-  - name: lane_change_param
-    default: $(find-pkg-share autoware_behavior_path_planner)/config/lane_change.param.yaml
-  - name: goal_planner_param
-    default: $(find-pkg-share autoware_behavior_path_planner)/config/goal_planner.param.yaml
+    default: $(find-pkg-share autoware_launch)/config/planning/scenario_planning/lane_driving/behavior_planning/behavior_path_planner/behavior_path_planner.param.yaml
+  - name: scene_module_manager_param
+    default: $(find-pkg-share autoware_launch)/config/planning/scenario_planning/lane_driving/behavior_planning/behavior_path_planner/scene_module_manager.param.yaml
+  - name: side_shift_param
+    default: $(find-pkg-share autoware_launch)/config/planning/scenario_planning/lane_driving/behavior_planning/behavior_path_planner/side_shift/side_shift.param.yaml
   - name: avoidance_param
-    default: $(find-pkg-share autoware_behavior_path_planner)/config/avoidance.param.yaml
+    default: $(find-pkg-share autoware_launch)/config/planning/scenario_planning/lane_driving/behavior_planning/behavior_path_planner/autoware_behavior_path_static_obstacle_avoidance_module/static_obstacle_avoidance.param.yaml
+  - name: avoidance_by_lc_param
+    default: $(find-pkg-share autoware_launch)/config/planning/scenario_planning/lane_driving/behavior_planning/behavior_path_planner/avoidance_by_lane_change/avoidance_by_lane_change.param.yaml
+  - name: sampling_planner_param
+    default: $(find-pkg-share autoware_launch)/config/planning/scenario_planning/lane_driving/behavior_planning/behavior_path_planner/sampling_planner/sampling_planner.param.yaml
+  - name: dynamic_obstacle_avoidance_param
+    default: $(find-pkg-share autoware_launch)/config/planning/scenario_planning/lane_driving/behavior_planning/behavior_path_planner/autoware_behavior_path_dynamic_obstacle_avoidance_module/dynamic_obstacle_avoidance.param.yaml
+  - name: lane_change_param
+    default: $(find-pkg-share autoware_launch)/config/planning/scenario_planning/lane_driving/behavior_planning/behavior_path_planner/lane_change/lane_change.param.yaml
+  - name: goal_planner_param
+    default: $(find-pkg-share autoware_launch)/config/planning/scenario_planning/lane_driving/behavior_planning/behavior_path_planner/goal_planner/goal_planner.param.yaml
+  - name: start_planner_param
+    default: $(find-pkg-share autoware_launch)/config/planning/scenario_planning/lane_driving/behavior_planning/behavior_path_planner/start_planner/start_planner.param.yaml
+  - name: bidirectional_traffic_param
+    default: $(find-pkg-share autoware_launch)/config/planning/scenario_planning/lane_driving/behavior_planning/behavior_path_planner/autoware_behavior_path_bidirectional_traffic_module/bidirectional_traffic.param.yaml
+  - name: drivable_area_expansion_param
+    default: $(find-pkg-share autoware_launch)/config/planning/scenario_planning/lane_driving/behavior_planning/behavior_path_planner/drivable_area_expansion.param.yaml
 processes:
   - name: plan_path
     trigger_conditions:

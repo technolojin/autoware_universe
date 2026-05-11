@@ -22,12 +22,20 @@ publishers:
     message_type: tier4_planning_msgs/msg/VelocityLimit
 param_files:
   - name: common_param
-    default: $(find-pkg-share autoware_planning_common)/config/common.param.yaml
+    default: $(find-pkg-share autoware_launch)/config/planning/scenario_planning/common/common.param.yaml
   - name: nearest_search_param
-    default: $(find-pkg-share autoware_planning_common)/config/nearest_search.param.yaml
+    default: $(find-pkg-share autoware_launch)/config/planning/scenario_planning/common/nearest_search.param.yaml
   - name: velocity_smoother_param
-    default: $(find-pkg-share autoware_velocity_smoother)/config/velocity_smoother.param.yaml
-param_values: []
+    default: $(find-pkg-share autoware_launch)/config/planning/scenario_planning/common/autoware_velocity_smoother/velocity_smoother.param.yaml
+  - name: velocity_smoother_type_param
+    default: $(find-pkg-share autoware_launch)/config/planning/scenario_planning/common/autoware_velocity_smoother/Analytical.param.yaml
+param_values:
+  - name: algorithm_type
+    type: string
+    default: Analytical
+  - name: publish_debug_trajs
+    type: bool
+    default: false
 processes:
   - name: smooth_velocity
     trigger_conditions:

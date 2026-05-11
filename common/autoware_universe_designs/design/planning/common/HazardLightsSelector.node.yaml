@@ -14,7 +14,9 @@ subscribers:
 publishers:
   - name: hazard_lights_cmd
     message_type: autoware_vehicle_msgs/msg/HazardLightsCommand
-param_files: []
+param_files:
+  - name: hazard_lights_selector_param
+    default: $(find-pkg-share autoware_launch)/config/planning/scenario_planning/common/autoware_hazard_lights_selector/hazard_lights_selector.param.yaml
 param_values: []
 processes:
   - name: select_hazard_lights

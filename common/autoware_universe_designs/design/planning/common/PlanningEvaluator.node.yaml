@@ -17,9 +17,14 @@ publishers:
   - name: metrics
     message_type: autoware_planning_msgs/msg/PlanningAnalysis
 param_files:
+  - name: common_param
+    default: $(find-pkg-share autoware_launch)/config/planning/scenario_planning/common/common.param.yaml
   - name: planning_evaluator_param
     default: $(find-pkg-share autoware_planning_evaluator)/config/planning_evaluator.param.yaml
-param_values: []
+param_values:
+  - name: output_metrics
+    type: bool
+    default: false
 processes:
   - name: evaluate
     trigger_conditions:

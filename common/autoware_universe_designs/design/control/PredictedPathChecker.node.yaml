@@ -21,8 +21,10 @@ publishers:
   - name: status
     message_type: diagnostic_msgs/msg/DiagnosticStatus
 param_files:
+  - name: vehicle_param
+    default: $(find-pkg-share autoware_launch)/config/vehicle_info.param.yaml
   - name: predicted_path_checker_param
-    default: $(find-pkg-share autoware_predicted_path_checker)/config/predicted_path_checker.param.yaml
+    default: $(find-pkg-share autoware_launch)/config/control/predicted_path_checker/predicted_path_checker.param.yaml
 param_values: []
 processes:
   - name: check_path

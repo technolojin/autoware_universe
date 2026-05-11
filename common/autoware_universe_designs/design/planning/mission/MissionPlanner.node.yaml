@@ -26,7 +26,7 @@ publishers:
     message_type: visualization_msgs/msg/MarkerArray
 param_files:
   - name: mission_planner_param
-    default: $(find-pkg-share autoware_mission_planner_universe)/config/mission_planner.param.yaml
+    default: $(find-pkg-share autoware_launch)/config/planning/mission_planning/mission_planner/mission_planner.param.yaml
 param_values: []
 processes:
   - name: plan_route

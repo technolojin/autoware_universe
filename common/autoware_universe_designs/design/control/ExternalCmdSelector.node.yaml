@@ -51,7 +51,7 @@ publishers:
 
 param_files:
   - name: external_cmd_selector_param
-    default: $(find-pkg-share autoware_external_cmd_selector)/config/external_cmd_selector.param.yaml
+    default: $(find-pkg-share autoware_launch)/config/control/external_cmd_selector/external_cmd_selector.param.yaml
 param_values: []
 
 processes:

@@ -26,7 +26,9 @@ publishers:
     message_type: tier4_planning_msgs/msg/Scenario
   - name: trajectory
     message_type: autoware_planning_msgs/msg/Trajectory
-param_files: []
+param_files:
+  - name: scenario_selector_param
+    default: $(find-pkg-share autoware_scenario_selector)/config/scenario_selector.param.yaml
 param_values: []
 processes:
   - name: select_scenario
