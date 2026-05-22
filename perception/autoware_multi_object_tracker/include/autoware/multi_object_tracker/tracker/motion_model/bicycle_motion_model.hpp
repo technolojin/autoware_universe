@@ -35,7 +35,6 @@ private:
 
   // stationarity prior state
   double stationary_duration_ = 0.0;  // [s] accumulated time with low velocity
-  double stationary_yaw_ref_ = 0.0;   // [rad] yaw captured when stationarity began
 
   // motion parameters: process noise and motion limits
   struct MotionParams

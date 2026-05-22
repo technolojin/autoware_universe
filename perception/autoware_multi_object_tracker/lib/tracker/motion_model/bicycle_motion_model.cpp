@@ -704,11 +704,13 @@ bool BicycleMotionModel::applyStationaryPrior(const double dt)
 {
   if (!checkInitialized()) return false;
 
-  // Thresholds
   constexpr double vel_stationary_threshold = 0.5;  // [m/s]
   constexpr double activation_duration = 1.0;       // [s] wait before applying the prior
-  // Measurement noise: ~5.7 deg stddev — soft enough not to override real measurements
-  constexpr double r_yaw = 0.01;  // [rad^2]
+  // Soft constraint on the lateral-velocity state V (= vel_lat * wheel_pos_ratio).
+  // Yaw rate = V / wheel_base, so V ≈ 0 means the process model predicts zero turning.
+  // R is chosen larger than typical process noise (q_cov_acc_lat * dt^2 ≈ 0.002 m^2/s^2)
+  // so that real measurements can still update V freely while long-term drift is damped.
+  constexpr double r_yaw_rate = 0.01;  // [m^2/s^2 in V units]
 
   const double vel_long = getStateElement(IDX::U);
 
@@ -717,42 +719,25 @@ bool BicycleMotionModel::applyStationaryPrior(const double dt)
     return true;
   }
 
-  // Capture reference yaw at the moment the object first becomes stationary
-  if (stationary_duration_ == 0.0) {
-    stationary_yaw_ref_ = getYawState();
-  }
   stationary_duration_ += dt;
 
   if (stationary_duration_ < activation_duration) {
     return true;
   }
 
-  // Yaw innovation: desired minus current, wrapped to [-pi, pi]
-  const double yaw = getYawState();
-  double yaw_diff = stationary_yaw_ref_ - yaw;
-  while (yaw_diff > M_PI) yaw_diff -= 2.0 * M_PI;
-  while (yaw_diff < -M_PI) yaw_diff += 2.0 * M_PI;
-
-  StateVec X;
-  ekf_.getX(X);
-  const double wheel_base = std::hypot(X(IDX::X2) - X(IDX::X1), X(IDX::Y2) - X(IDX::Y1));
-  if (wheel_base < 1e-3) return false;
-
-  // Linearised yaw measurement: h(x) = atan2(y2-y1, x2-x1)
-  // Jacobian H satisfies H*x = 0 at the current state, so passing yaw_diff
-  // directly gives EKF innovation = yaw_diff - H*x = yaw_diff.
+  // Issue a soft measurement V = 0 (zero yaw rate).
+  // Absolute yaw is NOT constrained: yaw can still shift freely from measurement
+  // updates. Only the process-model turning rate is dampened, preventing the
+  // prediction step from amplifying any measurement-induced yaw errors.
   constexpr int DIM_Y = 1;
   Eigen::Matrix<double, DIM_Y, 1> Y;
-  Y << yaw_diff;
+  Y << 0.0;
 
   Eigen::Matrix<double, DIM_Y, DIM> C = Eigen::Matrix<double, DIM_Y, DIM>::Zero();
-  C(0, IDX::X1) = std::sin(yaw) / wheel_base;
-  C(0, IDX::Y1) = -std::cos(yaw) / wheel_base;
-  C(0, IDX::X2) = -std::sin(yaw) / wheel_base;
-  C(0, IDX::Y2) = std::cos(yaw) / wheel_base;
+  C(0, IDX::V) = 1.0;
 
   Eigen::Matrix<double, DIM_Y, DIM_Y> R;
-  R << r_yaw;
+  R << r_yaw_rate;
 
   return ekf_.update(Y, C, R);
 }
