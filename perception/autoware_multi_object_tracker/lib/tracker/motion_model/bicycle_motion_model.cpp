@@ -700,4 +700,61 @@ bool BicycleMotionModel::getPredictedState(
   return true;
 }
 
+bool BicycleMotionModel::applyStationaryPrior(const double dt)
+{
+  if (!checkInitialized()) return false;
+
+  // Thresholds
+  constexpr double vel_stationary_threshold = 0.5;  // [m/s]
+  constexpr double activation_duration = 1.0;       // [s] wait before applying the prior
+  // Measurement noise: ~5.7 deg stddev — soft enough not to override real measurements
+  constexpr double r_yaw = 0.01;  // [rad^2]
+
+  const double vel_long = getStateElement(IDX::U);
+
+  if (std::abs(vel_long) >= vel_stationary_threshold) {
+    stationary_duration_ = 0.0;
+    return true;
+  }
+
+  // Capture reference yaw at the moment the object first becomes stationary
+  if (stationary_duration_ == 0.0) {
+    stationary_yaw_ref_ = getYawState();
+  }
+  stationary_duration_ += dt;
+
+  if (stationary_duration_ < activation_duration) {
+    return true;
+  }
+
+  // Yaw innovation: desired minus current, wrapped to [-pi, pi]
+  const double yaw = getYawState();
+  double yaw_diff = stationary_yaw_ref_ - yaw;
+  while (yaw_diff > M_PI) yaw_diff -= 2.0 * M_PI;
+  while (yaw_diff < -M_PI) yaw_diff += 2.0 * M_PI;
+
+  StateVec X;
+  ekf_.getX(X);
+  const double wheel_base = std::hypot(X(IDX::X2) - X(IDX::X1), X(IDX::Y2) - X(IDX::Y1));
+  if (wheel_base < 1e-3) return false;
+
+  // Linearised yaw measurement: h(x) = atan2(y2-y1, x2-x1)
+  // Jacobian H satisfies H*x = 0 at the current state, so passing yaw_diff
+  // directly gives EKF innovation = yaw_diff - H*x = yaw_diff.
+  constexpr int DIM_Y = 1;
+  Eigen::Matrix<double, DIM_Y, 1> Y;
+  Y << yaw_diff;
+
+  Eigen::Matrix<double, DIM_Y, DIM> C = Eigen::Matrix<double, DIM_Y, DIM>::Zero();
+  C(0, IDX::X1) = std::sin(yaw) / wheel_base;
+  C(0, IDX::Y1) = -std::cos(yaw) / wheel_base;
+  C(0, IDX::X2) = -std::sin(yaw) / wheel_base;
+  C(0, IDX::Y2) = std::cos(yaw) / wheel_base;
+
+  Eigen::Matrix<double, DIM_Y, DIM_Y> R;
+  R << r_yaw;
+
+  return ekf_.update(Y, C, R);
+}
+
 }  // namespace autoware::multi_object_tracker

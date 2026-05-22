@@ -33,6 +33,10 @@ private:
   // attributes
   rclcpp::Logger logger_;
 
+  // stationarity prior state
+  double stationary_duration_ = 0.0;  // [s] accumulated time with low velocity
+  double stationary_yaw_ref_ = 0.0;   // [rad] yaw captured when stationarity began
+
   // motion parameters: process noise and motion limits
   struct MotionParams
   {
@@ -119,6 +123,10 @@ public:
   bool adjustPosition(const double & delta_x, const double & delta_y);
 
   bool limitStates();
+
+  // Apply a soft yaw-freeze prior after each predict step when the object is stationary.
+  // Prevents front-axle drift from amplifying through alignClusterToTrackerOrientation.
+  bool applyStationaryPrior(double dt);
 
   bool predictStateStep(const double dt, KalmanFilter & ekf) const override;
 

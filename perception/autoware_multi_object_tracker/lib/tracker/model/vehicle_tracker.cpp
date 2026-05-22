@@ -131,7 +131,11 @@ VehicleTracker::VehicleTracker(
 
 bool VehicleTracker::predict(const rclcpp::Time & time)
 {
-  return motion_model_.predictState(time);
+  // getDeltaTime must be read before predictState updates last_update_time_
+  const double dt = motion_model_.getDeltaTime(time);
+  const bool result = motion_model_.predictState(time);
+  motion_model_.applyStationaryPrior(dt);
+  return result;
 }
 
 bool VehicleTracker::measureWithPose(
