@@ -15,7 +15,7 @@
 #ifndef AUTOWARE__MULTI_OBJECT_TRACKER__TRACKER__MOTION_MODEL__MOTION_MODEL_MATH_HPP_
 #define AUTOWARE__MULTI_OBJECT_TRACKER__TRACKER__MOTION_MODEL__MOTION_MODEL_MATH_HPP_
 
-#include <tf2/LinearMath/Quaternion.hpp>
+#include <cmath>
 
 #include <geometry_msgs/msg/pose.hpp>
 
@@ -56,12 +56,10 @@ inline double clampSymmetric(const double val, const double abs_max)
 // Set pose orientation from a 2D yaw angle (roll = pitch = 0).
 inline void setOrientationFromYaw(geometry_msgs::msg::Pose & pose, const double yaw)
 {
-  tf2::Quaternion q;
-  q.setRPY(0.0, 0.0, yaw);
-  pose.orientation.x = q.x();
-  pose.orientation.y = q.y();
-  pose.orientation.z = q.z();
-  pose.orientation.w = q.w();
+  pose.orientation.x = 0.0;
+  pose.orientation.y = 0.0;
+  pose.orientation.z = std::sin(yaw * 0.5);
+  pose.orientation.w = std::cos(yaw * 0.5);
 }
 
 }  // namespace autoware::multi_object_tracker::motion_model_math
