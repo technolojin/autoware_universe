@@ -263,7 +263,8 @@ bool CVMotionModel::getPredictedState(
   twist_cov_mat(0, 1) = P(IDX::VX, IDX::VY);
   twist_cov_mat(1, 0) = P(IDX::VY, IDX::VX);
   twist_cov_mat(1, 1) = P(IDX::VY, IDX::VY);
-  const Eigen::Matrix2d twist_cov_rotated = motion_model_math::rotateCov2D(twist_cov_mat, yaw);
+  const Eigen::Matrix2d twist_cov_rotated =
+    motion_model_math::rotateCov2D(twist_cov_mat, cos_yaw, sin_yaw);
   twist_cov[XYZRPY_COV_IDX::X_X] = twist_cov_rotated(0, 0);
   twist_cov[XYZRPY_COV_IDX::X_Y] = twist_cov_rotated(0, 1);
   twist_cov[XYZRPY_COV_IDX::Y_X] = twist_cov_rotated(1, 0);

@@ -1,4 +1,4 @@
-// Copyright 2026 TIER IV, Inc.
+// Copyright 2024 TIER IV, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,27 +15,26 @@
 #ifndef AUTOWARE__MULTI_OBJECT_TRACKER__TRACKER__MOTION_MODEL__MOTION_MODEL_MATH_HPP_
 #define AUTOWARE__MULTI_OBJECT_TRACKER__TRACKER__MOTION_MODEL__MOTION_MODEL_MATH_HPP_
 
-#include <geometry_msgs/msg/pose.hpp>
+#include <Eigen/Core>
 
-#include <Eigen/Geometry>
+#include <geometry_msgs/msg/pose.hpp>
 
 #include <cmath>
 
 namespace autoware::multi_object_tracker::motion_model_math
 {
 
-// Tentative default covariance for axes that are not modelled (Z, ROLL, PITCH, etc.)
 constexpr double kUnobservedCov = 0.1 * 0.1;  // [m^2 or rad^2]
 
-// Result of rotating a diagonal 2D covariance into the world frame.
+// Result type for rotateDiagCov2D.
 struct RotatedCov2D
 {
   double xx, xy, yy;
 };
 
-// Rotate diagonal process-noise covariance (cov_long, cov_lat) by yaw.
-// Accepts pre-computed trigonometric products so no extra trig calls are introduced.
-// Formula: R * diag(cov_long, cov_lat) * R^T  where R = Rot(yaw)
+// Rotate diagonal process-noise (cov_long, cov_lat) by yaw into world frame.
+// Caller provides precomputed sin^2, cos^2, sin*cos to avoid extra trig.
+// Formula: R(yaw) * diag(cov_long, cov_lat) * R(yaw)^T
 inline RotatedCov2D rotateDiagCov2D(
   const double cov_long, const double cov_lat, const double sin_yaw_sq, const double cos_yaw_sq,
   const double sin_cos_yaw)
@@ -47,7 +46,23 @@ inline RotatedCov2D rotateDiagCov2D(
   };
 }
 
-// Clamp val symmetrically to [-abs_max, abs_max].
+// Rotate symmetric 2x2 covariance M by angle -yaw: R(-yaw) * M * R(-yaw)^T
+// Caller provides precomputed cos_yaw/sin_yaw to avoid extra trig.
+inline Eigen::Matrix2d rotateCov2D(
+  const Eigen::Matrix2d & cov, const double cos_yaw, const double sin_yaw)
+{
+  const double cos_yaw_sq = cos_yaw * cos_yaw;
+  const double sin_yaw_sq = sin_yaw * sin_yaw;
+  const double sin_cos_yaw = sin_yaw * cos_yaw;
+  const double a = cov(0, 0), b = cov(0, 1), d = cov(1, 1);
+  Eigen::Matrix2d result;
+  result(0, 0) = cos_yaw_sq * a + 2.0 * sin_cos_yaw * b + sin_yaw_sq * d;
+  result(0, 1) = sin_cos_yaw * (d - a) + (cos_yaw_sq - sin_yaw_sq) * b;
+  result(1, 0) = result(0, 1);
+  result(1, 1) = sin_yaw_sq * a - 2.0 * sin_cos_yaw * b + cos_yaw_sq * d;
+  return result;
+}
+
 inline double clampSymmetric(const double val, const double abs_max)
 {
   if (val > abs_max) return abs_max;
@@ -55,7 +70,6 @@ inline double clampSymmetric(const double val, const double abs_max)
   return val;
 }
 
-// Set pose orientation from a 2D yaw angle (roll = pitch = 0).
 inline void setOrientationFromYaw(geometry_msgs::msg::Pose & pose, const double yaw)
 {
   pose.orientation.x = 0.0;
@@ -64,16 +78,7 @@ inline void setOrientationFromYaw(geometry_msgs::msg::Pose & pose, const double 
   pose.orientation.w = std::cos(yaw * 0.5);
 }
 
-// Rotate a full (non-diagonal) 2×2 covariance into the body frame:
-// R(-yaw) * M * R(-yaw)^T
-inline Eigen::Matrix2d rotateCov2D(const Eigen::Matrix2d & cov, const double yaw)
-{
-  const Eigen::Matrix2d R = Eigen::Rotation2Dd(-yaw).toRotationMatrix();
-  return R * cov * R.transpose();
-}
-
-// Adjust measured_yaw to be continuous with estimated_yaw across π-wrap boundaries.
-// Prevents sign flips in the Kalman innovation when yaw is observed directly.
+// Adjust measured_yaw to be continuous with estimated_yaw across pi-wrap boundaries.
 inline double fixYawContinuity(const double estimated_yaw, const double measured_yaw)
 {
   return measured_yaw + M_PI * std::round((estimated_yaw - measured_yaw) / M_PI);
