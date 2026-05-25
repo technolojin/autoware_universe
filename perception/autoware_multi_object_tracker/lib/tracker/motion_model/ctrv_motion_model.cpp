@@ -31,11 +31,7 @@ using autoware_utils_geometry::xyzrpy_covariance_index::XYZRPY_COV_IDX;
 
 static double fixYawContinuity(const double estimated_yaw, const double measured_yaw)
 {
-  double fixed_yaw = measured_yaw;
-  while (std::fabs(estimated_yaw - fixed_yaw) > M_PI_2) {
-    fixed_yaw += (fixed_yaw < estimated_yaw) ? M_PI : -M_PI;
-  }
-  return fixed_yaw;
+  return measured_yaw + M_PI * std::round((estimated_yaw - measured_yaw) / M_PI);
 }
 
 CTRVMotionModel::CTRVMotionModel() : logger_(rclcpp::get_logger("CTRVMotionModel"))
