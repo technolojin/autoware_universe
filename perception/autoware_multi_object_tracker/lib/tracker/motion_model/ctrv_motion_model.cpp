@@ -15,6 +15,7 @@
 #define EIGEN_MPL2_ONLY
 
 #include "autoware/multi_object_tracker/tracker/motion_model/ctrv_motion_model.hpp"
+
 #include "autoware/multi_object_tracker/tracker/motion_model/motion_model_math.hpp"
 
 #include <Eigen/Core>

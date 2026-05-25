@@ -15,9 +15,9 @@
 #ifndef AUTOWARE__MULTI_OBJECT_TRACKER__TRACKER__MOTION_MODEL__MOTION_MODEL_MATH_HPP_
 #define AUTOWARE__MULTI_OBJECT_TRACKER__TRACKER__MOTION_MODEL__MOTION_MODEL_MATH_HPP_
 
-#include <cmath>
-
 #include <geometry_msgs/msg/pose.hpp>
+
+#include <cmath>
 
 namespace autoware::multi_object_tracker::motion_model_math
 {
@@ -35,13 +35,13 @@ struct RotatedCov2D
 // Accepts pre-computed trigonometric products so no extra trig calls are introduced.
 // Formula: R * diag(cov_long, cov_lat) * R^T  where R = Rot(yaw)
 inline RotatedCov2D rotateDiagCov2D(
-  const double cov_long, const double cov_lat,
-  const double sin_yaw_sq, const double cos_yaw_sq, const double sin_cos_yaw)
+  const double cov_long, const double cov_lat, const double sin_yaw_sq, const double cos_yaw_sq,
+  const double sin_cos_yaw)
 {
   return {
     cov_long * cos_yaw_sq + cov_lat * sin_yaw_sq,  // xx
-    (cov_long - cov_lat) * sin_cos_yaw,             // xy = yx
-    cov_long * sin_yaw_sq + cov_lat * cos_yaw_sq    // yy
+    (cov_long - cov_lat) * sin_cos_yaw,            // xy = yx
+    cov_long * sin_yaw_sq + cov_lat * cos_yaw_sq   // yy
   };
 }
 

@@ -15,6 +15,7 @@
 #define EIGEN_MPL2_ONLY
 
 #include "autoware/multi_object_tracker/tracker/motion_model/bicycle_motion_model.hpp"
+
 #include "autoware/multi_object_tracker/tracker/motion_model/motion_model_math.hpp"
 
 #include <Eigen/Core>
@@ -619,8 +620,8 @@ bool BicycleMotionModel::predictStateStep(const double dt, KalmanFilter & ekf) c
   Q(IDX::Y1, IDX::X1) = q_rear.xy;
   Q(IDX::Y1, IDX::Y1) = q_rear.yy;
 
-  const auto q_front =
-    motion_model_math::rotateDiagCov2D(q_cov_long2, q_cov_lat2, sin_yaw_sq, cos_yaw_sq, sin_cos_yaw);
+  const auto q_front = motion_model_math::rotateDiagCov2D(
+    q_cov_long2, q_cov_lat2, sin_yaw_sq, cos_yaw_sq, sin_cos_yaw);
   Q(IDX::X2, IDX::X2) = q_front.xx;
   Q(IDX::X2, IDX::Y2) = q_front.xy;
   Q(IDX::Y2, IDX::X2) = q_front.xy;
