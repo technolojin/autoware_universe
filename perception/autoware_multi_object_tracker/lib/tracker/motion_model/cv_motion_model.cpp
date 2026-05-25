@@ -231,15 +231,17 @@ bool CVMotionModel::getPredictedState(
 
   // get yaw from pose
   const double yaw = tf2::getYaw(pose.orientation);
+  const double cos_yaw = std::cos(yaw);
+  const double sin_yaw = std::sin(yaw);
 
   // set position
   pose.position.x = X(IDX::X);
   pose.position.y = X(IDX::Y);
   // do not change z
 
-  // set twist
-  twist.linear.x = X(IDX::VX) * std::cos(-yaw) - X(IDX::VY) * std::sin(-yaw);
-  twist.linear.y = X(IDX::VX) * std::sin(-yaw) + X(IDX::VY) * std::cos(-yaw);
+  // set twist (rotate world-frame velocity into body frame)
+  twist.linear.x = X(IDX::VX) * cos_yaw + X(IDX::VY) * sin_yaw;
+  twist.linear.y = -X(IDX::VX) * sin_yaw + X(IDX::VY) * cos_yaw;
   twist.linear.z = 0.0;
   twist.angular.x = 0.0;
   twist.angular.y = 0.0;
@@ -255,15 +257,13 @@ bool CVMotionModel::getPredictedState(
   pose_cov[XYZRPY_COV_IDX::PITCH_PITCH] = motion_model_math::kUnobservedCov;
   pose_cov[XYZRPY_COV_IDX::YAW_YAW] = motion_model_math::kUnobservedCov;
 
-  // set twist covariance
-  // rotate covariance matrix
-  Eigen::Matrix2d twist_cov_rotate;
-  twist_cov_rotate(0, 0) = P(IDX::VX, IDX::VX);
-  twist_cov_rotate(0, 1) = P(IDX::VX, IDX::VY);
-  twist_cov_rotate(1, 0) = P(IDX::VY, IDX::VX);
-  twist_cov_rotate(1, 1) = P(IDX::VY, IDX::VY);
-  Eigen::Matrix2d R_yaw = Eigen::Rotation2Dd(-yaw).toRotationMatrix();
-  Eigen::Matrix2d twist_cov_rotated = R_yaw * twist_cov_rotate * R_yaw.transpose();
+  // set twist covariance (rotate velocity covariance into body frame)
+  Eigen::Matrix2d twist_cov_mat;
+  twist_cov_mat(0, 0) = P(IDX::VX, IDX::VX);
+  twist_cov_mat(0, 1) = P(IDX::VX, IDX::VY);
+  twist_cov_mat(1, 0) = P(IDX::VY, IDX::VX);
+  twist_cov_mat(1, 1) = P(IDX::VY, IDX::VY);
+  const Eigen::Matrix2d twist_cov_rotated = motion_model_math::rotateCov2D(twist_cov_mat, yaw);
   twist_cov[XYZRPY_COV_IDX::X_X] = twist_cov_rotated(0, 0);
   twist_cov[XYZRPY_COV_IDX::X_Y] = twist_cov_rotated(0, 1);
   twist_cov[XYZRPY_COV_IDX::Y_X] = twist_cov_rotated(1, 0);

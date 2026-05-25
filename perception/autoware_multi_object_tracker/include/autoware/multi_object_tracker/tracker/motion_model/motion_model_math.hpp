@@ -17,6 +17,8 @@
 
 #include <geometry_msgs/msg/pose.hpp>
 
+#include <Eigen/Geometry>
+
 #include <cmath>
 
 namespace autoware::multi_object_tracker::motion_model_math
@@ -60,6 +62,21 @@ inline void setOrientationFromYaw(geometry_msgs::msg::Pose & pose, const double 
   pose.orientation.y = 0.0;
   pose.orientation.z = std::sin(yaw * 0.5);
   pose.orientation.w = std::cos(yaw * 0.5);
+}
+
+// Rotate a full (non-diagonal) 2×2 covariance into the body frame:
+// R(-yaw) * M * R(-yaw)^T
+inline Eigen::Matrix2d rotateCov2D(const Eigen::Matrix2d & cov, const double yaw)
+{
+  const Eigen::Matrix2d R = Eigen::Rotation2Dd(-yaw).toRotationMatrix();
+  return R * cov * R.transpose();
+}
+
+// Adjust measured_yaw to be continuous with estimated_yaw across π-wrap boundaries.
+// Prevents sign flips in the Kalman innovation when yaw is observed directly.
+inline double fixYawContinuity(const double estimated_yaw, const double measured_yaw)
+{
+  return measured_yaw + M_PI * std::round((estimated_yaw - measured_yaw) / M_PI);
 }
 
 }  // namespace autoware::multi_object_tracker::motion_model_math

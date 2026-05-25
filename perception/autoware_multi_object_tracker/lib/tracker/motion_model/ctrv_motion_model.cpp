@@ -30,11 +30,6 @@ namespace autoware::multi_object_tracker
 // Constant Turn Rate and constant Velocity (CTRV) motion model
 using autoware_utils_geometry::xyzrpy_covariance_index::XYZRPY_COV_IDX;
 
-static double fixYawContinuity(const double estimated_yaw, const double measured_yaw)
-{
-  return measured_yaw + M_PI * std::round((estimated_yaw - measured_yaw) / M_PI);
-}
-
 CTRVMotionModel::CTRVMotionModel() : logger_(rclcpp::get_logger("CTRVMotionModel"))
 {
   // set prediction parameters
@@ -117,7 +112,7 @@ bool CTRVMotionModel::updateStatePoseHead(
   constexpr int DIM_Y = 3;
 
   // fix yaw
-  const double fixed_yaw = fixYawContinuity(getStateElement(IDX::YAW), yaw);
+  const double fixed_yaw = motion_model_math::fixYawContinuity(getStateElement(IDX::YAW), yaw);
 
   // update state
   Eigen::Matrix<double, DIM_Y, 1> Y;
@@ -153,7 +148,7 @@ bool CTRVMotionModel::updateStatePoseHeadVel(
   constexpr int DIM_Y = 4;
 
   // fix yaw
-  const double fixed_yaw = fixYawContinuity(getStateElement(IDX::YAW), yaw);
+  const double fixed_yaw = motion_model_math::fixYawContinuity(getStateElement(IDX::YAW), yaw);
 
   // update state
   Eigen::Matrix<double, DIM_Y, 1> Y;
