@@ -40,6 +40,7 @@ namespace utils
 using autoware_perception_msgs::msg::ObjectClassification;
 using autoware_perception_msgs::msg::PredictedObject;
 using autoware_perception_msgs::msg::PredictedObjectKinematics;
+using autoware_perception_msgs::msg::Shape;
 using autoware_perception_msgs::msg::TrackedObject;
 using autoware_perception_msgs::msg::TrackedObjectKinematics;
 
@@ -86,6 +87,12 @@ extern template std::unordered_set<std::string> removeOldObjectsHistory<Crosswal
 
 PredictedObjectKinematics convertToPredictedKinematics(
   const TrackedObjectKinematics & tracked_object);
+
+// Expand bounding box dimensions to encompass the footprint polygon vertices.
+// Footprint points are in the object's local frame (relative to bbox center).
+// Shape type, footprint, and height (dimensions.z) are preserved unchanged.
+// Non-BOUNDING_BOX shapes and empty footprints are returned as-is.
+Shape expandShapeWithFootprint(const Shape & shape);
 
 PredictedObject convertToPredictedObject(const TrackedObject & tracked_object);
 

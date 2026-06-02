@@ -43,6 +43,8 @@ namespace autoware::map_based_prediction
 namespace utils
 {
 
+using autoware_perception_msgs::msg::Shape;
+
 /**
  * @brief calc absolute normalized yaw difference between lanelet and object
  *
@@ -230,15 +232,37 @@ PredictedObjectKinematics convertToPredictedKinematics(
   return output;
 }
 
+Shape expandShapeWithFootprint(const Shape & shape)
+{
+  if (shape.type != Shape::BOUNDING_BOX || shape.footprint.points.empty()) {
+    return shape;
+  }
+
+  double max_x = shape.dimensions.x / 2.0;
+  double min_x = -max_x;
+  double max_y = shape.dimensions.y / 2.0;
+  double min_y = -max_y;
+
+  for (const auto & pt : shape.footprint.points) {
+    max_x = std::max(max_x, static_cast<double>(pt.x));
+    min_x = std::min(min_x, static_cast<double>(pt.x));
+    max_y = std::max(max_y, static_cast<double>(pt.y));
+    min_y = std::min(min_y, static_cast<double>(pt.y));
+  }
+
+  Shape expanded = shape;
+  expanded.dimensions.x = max_x - min_x;
+  expanded.dimensions.y = max_y - min_y;
+  return expanded;
+}
+
 PredictedObject convertToPredictedObject(const TrackedObject & tracked_object)
 {
   PredictedObject predicted_object;
   predicted_object.kinematics = convertToPredictedKinematics(tracked_object.kinematics);
   predicted_object.classification = tracked_object.classification;
   predicted_object.object_id = tracked_object.object_id;
-  predicted_object.shape.type = tracked_object.shape.type;
-  predicted_object.shape.footprint = tracked_object.shape.footprint;
-  predicted_object.shape.dimensions = tracked_object.shape.dimensions;
+  predicted_object.shape = expandShapeWithFootprint(tracked_object.shape);
   predicted_object.existence_probability = tracked_object.existence_probability;
 
   return predicted_object;
