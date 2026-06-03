@@ -16,6 +16,8 @@
 
 #include "autoware/multi_object_tracker/tracker/model/pedestrian_tracker.hpp"
 
+#include "autoware/multi_object_tracker/object_model/shapes.hpp"
+
 #include <Eigen/Core>
 #include <Eigen/Geometry>
 #include <autoware_utils_geometry/boost_polygon_utils.hpp>
@@ -34,13 +36,25 @@ PedestrianTracker::PedestrianTracker(const rclcpp::Time & time, const types::Dyn
 {
   tracker_type_ = TrackerType::PEDESTRIAN;
 
-  if (object.shape.type == autoware_perception_msgs::msg::Shape::POLYGON) {
-    // set default initial size
-    auto & object_extension = object_.shape.dimensions;
-    object_extension.x = object_model_.init_size.length;
-    object_extension.y = object_model_.init_size.width;
-    object_extension.z = object_model_.init_size.height;
+  using Shape = autoware_perception_msgs::msg::Shape;
+  if (object.shape.type == Shape::POLYGON) {
+    types::DynamicObject bbox_object;
+    if (shapes::convertConvexHullToBoundingBox(object, bbox_object, std::nullopt)) {
+      object_.shape.dimensions.x = bbox_object.shape.dimensions.x;
+      object_.shape.dimensions.y = bbox_object.shape.dimensions.y;
+      object_.pose.orientation = bbox_object.pose.orientation;
+    } else {
+      object_.shape.dimensions.x = object_model_.init_size.length;
+      object_.shape.dimensions.y = object_model_.init_size.width;
+      object_.shape.dimensions.z = object_model_.init_size.height;
+    }
+  } else if (object.shape.type == Shape::CYLINDER) {
+    const double diameter = std::max(object_.shape.dimensions.x, object_.shape.dimensions.y);
+    object_.shape.dimensions.x = diameter;
+    object_.shape.dimensions.y = diameter;
   }
+  object_.shape.type = Shape::BOUNDING_BOX;
+  object_.shape.footprint.points.clear();
   // set maximum and minimum size
   limitObjectExtension(object_model_);
 
@@ -131,38 +145,77 @@ bool PedestrianTracker::measureWithPose(const types::DynamicObject & object)
   return is_updated;
 }
 
-bool PedestrianTracker::measureWithShape(const types::DynamicObject & object)
+bool PedestrianTracker::measureWithShape(
+  const types::DynamicObject & object, const rclcpp::Time & time, const bool trust_extension)
 {
-  if (object.shape.type != autoware_perception_msgs::msg::Shape::POLYGON) {
-    constexpr double size_max = 30.0;  // [m]
-    constexpr double size_min = 0.1;   // [m]
+  using Shape = autoware_perception_msgs::msg::Shape;
+  const auto & sl = object_model_.size_limit;
+  const double len_max = sl.length_max * 1.5;
+  const double len_min = sl.length_min * 0.5;
+  const double wid_max = sl.width_max * 1.5;
+  const double wid_min = sl.width_min * 0.5;
+  const double hgt_max = sl.height_max * 1.5;
+  const double hgt_min = sl.height_min * 0.5;
+
+  if (object.shape.type == Shape::BOUNDING_BOX) {
+    const double dim_x = object.shape.dimensions.x;
+    const double dim_y = object.shape.dimensions.y;
+    const double dim_z = object.shape.dimensions.z;
     if (
-      object.shape.dimensions.x > size_max || object.shape.dimensions.x < size_min ||
-      object.shape.dimensions.y > size_max || object.shape.dimensions.y < size_min ||
-      object.shape.dimensions.z > size_max || object.shape.dimensions.z < size_min) {
+      dim_x > len_max || dim_x < len_min || dim_y > wid_max || dim_y < wid_min ||
+      dim_z > hgt_max || dim_z < hgt_min) {
       return false;
     }
-    constexpr double gain = 0.5;
-    constexpr double gain_inv = 1.0 - gain;
-    auto & object_extension = object_.shape.dimensions;
-    object_extension.x = gain_inv * object_extension.x + gain * object.shape.dimensions.x;
-    object_extension.y = gain_inv * object_extension.y + gain * object.shape.dimensions.y;
-    object_extension.z = gain_inv * object_extension.z + gain * object.shape.dimensions.z;
-
-    // update shape type, bounding box or cylinder
-    object_.shape.type = object.shape.type;
-    object_.area = types::getArea(object.shape);
-
-    // set maximum and minimum size
-    limitObjectExtension(object_model_);
+    const double gain = trust_extension ? 0.5 : 0.0;
+    const double gain_inv = 1.0 - gain;
+    object_.shape.dimensions.x = gain_inv * object_.shape.dimensions.x + gain * dim_x;
+    object_.shape.dimensions.y = gain_inv * object_.shape.dimensions.y + gain * dim_y;
+    object_.shape.dimensions.z = gain_inv * object_.shape.dimensions.z + gain * dim_z;
+  } else if (object.shape.type == Shape::CYLINDER) {
+    const double diameter = std::max(object.shape.dimensions.x, object.shape.dimensions.y);
+    const double dim_z = object.shape.dimensions.z;
+    if (diameter > wid_max || diameter < wid_min || dim_z > hgt_max || dim_z < hgt_min) {
+      return false;
+    }
+    const double gain = trust_extension ? 0.5 : 0.0;
+    const double gain_inv = 1.0 - gain;
+    object_.shape.dimensions.x = gain_inv * object_.shape.dimensions.x + gain * diameter;
+    object_.shape.dimensions.y = gain_inv * object_.shape.dimensions.y + gain * diameter;
+    object_.shape.dimensions.z = gain_inv * object_.shape.dimensions.z + gain * dim_z;
   } else {
-    // do not update polygon shape
-    return false;
+    // POLYGON: project cluster footprint onto tracker heading
+    geometry_msgs::msg::Pose current_pose;
+    std::array<double, 36> pose_cov;
+    geometry_msgs::msg::Twist current_twist;
+    std::array<double, 36> twist_cov;
+    if (!motion_model_.getPredictedState(time, current_pose, pose_cov, current_twist, twist_cov)) {
+      return false;
+    }
+    const double tracker_yaw = tf2::getYaw(current_pose.orientation);
+    const auto aligned = shapes::alignClusterToOrientation(object, tracker_yaw);
+    if (!aligned) {
+      return false;
+    }
+    const double dim_x = aligned->shape.dimensions.x;
+    const double dim_y = aligned->shape.dimensions.y;
+    const double dim_z = aligned->shape.dimensions.z;
+    if (
+      dim_x > len_max || dim_x < len_min || dim_y > wid_max || dim_y < wid_min ||
+      dim_z > hgt_max || dim_z < hgt_min) {
+      return false;
+    }
+    // footprint is direct geometry — use low gain even when !trust_extension
+    const double gain = trust_extension ? 0.3 : 0.15;
+    const double gain_inv = 1.0 - gain;
+    object_.shape.dimensions.x = gain_inv * object_.shape.dimensions.x + gain * dim_x;
+    object_.shape.dimensions.y = gain_inv * object_.shape.dimensions.y + gain * dim_y;
+    object_.shape.dimensions.z = gain_inv * object_.shape.dimensions.z + gain * dim_z;
   }
 
-  // update shape type
-  object_.shape.type = object.shape.type;
-
+  object_.shape.type = Shape::BOUNDING_BOX;
+  object_.shape.footprint.points.clear();
+  object_.area = types::getArea(object_.shape);
+  limitObjectExtension(object_model_);
   return true;
 }
 
@@ -182,9 +235,7 @@ bool PedestrianTracker::measure(
 
   // update object
   measureWithPose(object);
-  if (channel_info.trust_extension) {
-    measureWithShape(object);
-  }
+  measureWithShape(object, time, channel_info.trust_extension);
 
   return true;
 }
@@ -233,6 +284,35 @@ bool PedestrianTracker::getTrackedObject(
         twist.linear.x =
           twist.linear.x > 0 ? twist.linear.x - vel_limit : twist.linear.x + vel_limit;
       }
+    }
+
+    // velocity-compensated footprint: inflate length to cover swept area since last measurement
+    const double dt = (time - getLatestMeasurementTime()).seconds();
+    const double vel = object.twist.linear.x;
+    const double inflation = std::max(0.0, vel * dt);
+    const bool apply_inflation = inflation > 0.05;
+
+    if (apply_inflation) {
+      const double yaw = tf2::getYaw(object.pose.orientation);
+      const double inflated_len = object.shape.dimensions.x + inflation;
+      const double clamped_len = std::min(inflated_len, object_model_.size_limit.length_max);
+      const double delta = clamped_len - object.shape.dimensions.x;
+      object.shape.dimensions.x = clamped_len;
+      object.pose.position.x += (delta / 2.0) * std::cos(yaw);
+      object.pose.position.y += (delta / 2.0) * std::sin(yaw);
+    }
+
+    // output type: CYLINDER when shape is nearly circular and there is no directional inflation
+    const double length = object.shape.dimensions.x;
+    const double width = object.shape.dimensions.y;
+    const double asymmetry = std::abs(length - width) / std::max(length, width);
+    if (asymmetry < 0.15 && !apply_inflation) {
+      object.shape.type = autoware_perception_msgs::msg::Shape::CYLINDER;
+      const double diameter = (length + width) / 2.0;
+      object.shape.dimensions.x = diameter;
+      object.shape.dimensions.y = diameter;
+    } else {
+      object.shape.type = autoware_perception_msgs::msg::Shape::BOUNDING_BOX;
     }
   }
 

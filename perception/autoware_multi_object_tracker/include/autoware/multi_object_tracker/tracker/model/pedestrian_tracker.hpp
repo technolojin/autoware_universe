@@ -42,10 +42,20 @@ public:
     const types::DynamicObject & object, const rclcpp::Time & time,
     const types::InputChannel & channel_info) override;
   bool measureWithPose(const types::DynamicObject & object);
-  bool measureWithShape(const types::DynamicObject & object);
+  bool measureWithShape(
+    const types::DynamicObject & object, const rclcpp::Time & time, bool trust_extension);
   bool getTrackedObject(
     const rclcpp::Time & time, types::DynamicObject & object,
     const bool to_publish = false) const override;
+
+protected:
+  UpdatePath selectUpdatePath(
+    bool trust_extension, bool has_significant_shape_change) const override
+  {
+    (void)trust_extension;
+    (void)has_significant_shape_change;
+    return UpdatePath::NORMAL;
+  }
 };
 
 }  // namespace autoware::multi_object_tracker

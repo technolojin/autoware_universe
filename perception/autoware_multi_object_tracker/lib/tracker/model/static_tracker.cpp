@@ -108,12 +108,12 @@ bool StaticTracker::getTrackedObject(
     return false;
   }
 
-  if (to_publish && object.shape.type == autoware_perception_msgs::msg::Shape::POLYGON) {
-    types::DynamicObject converted;
-    if (shapes::convertConvexHullToBoundingBox(object, converted, ego_pos_)) {
-      object = converted;
-    }
-  }
+  // if (to_publish && object.shape.type == autoware_perception_msgs::msg::Shape::POLYGON) {
+  //   types::DynamicObject converted;
+  //   if (shapes::convertConvexHullToBoundingBox(object, converted, ego_pos_)) {
+  //     object = converted;
+  //   }
+  // }
 
   return true;
 }
