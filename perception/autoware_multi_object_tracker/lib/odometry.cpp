@@ -16,6 +16,8 @@
 
 #include "autoware/multi_object_tracker/uncertainty/uncertainty_processor.hpp"
 
+#include <tf2/utils.hpp>
+
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 
 #include <memory>
@@ -165,6 +167,24 @@ std::optional<types::DynamicObjectList> Odometry::transformObjects(
       pose_cov = tf2::transformCovariance(pose_cov, tf_target2objects_world);
     }
   }
+  // Convert POLYGON footprint from object-local frame to global-fixed orientation.
+  // Done here so the world-frame yaw (after any pose transform above) is used.
+  for (auto & object : output_objects.objects) {
+    if (
+      object.shape.type == autoware_perception_msgs::msg::Shape::POLYGON &&
+      !object.shape.footprint.points.empty()) {
+      const double yaw = tf2::getYaw(object.pose.orientation);
+      const float c = static_cast<float>(std::cos(yaw));
+      const float s = static_cast<float>(std::sin(yaw));
+      for (auto & pt : object.shape.footprint.points) {
+        const float x = c * pt.x - s * pt.y;
+        const float y = s * pt.x + c * pt.y;
+        pt.x = x;
+        pt.y = y;
+      }
+    }
+  }
+
   // Add the odometry uncertainty to the object uncertainty
   if (enable_odometry_uncertainty_) {
     // Create a modeled odometry message

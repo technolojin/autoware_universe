@@ -17,6 +17,10 @@
 #include "autoware/multi_object_tracker/object_model/shapes.hpp"
 #include "autoware/multi_object_tracker/object_model/uuid.hpp"
 
+#include <tf2/utils.hpp>
+
+#include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
+
 #include <cmath>
 #include <vector>
 
@@ -91,7 +95,7 @@ DynamicObject toDynamicObject(
   dynamic_object.kinematics.has_twist = det_object.kinematics.has_twist;
   dynamic_object.kinematics.has_twist_covariance = det_object.kinematics.has_twist_covariance;
 
-  // shape
+  // shape — footprint kept in object-local frame here; rotated to global-fixed after frame transform
   dynamic_object.shape = det_object.shape;
   dynamic_object.area = getArea(det_object.shape);
 
@@ -152,6 +156,18 @@ autoware_perception_msgs::msg::TrackedObject toTrackedObjectMsg(const DynamicObj
   tracked_object.kinematics.is_stationary = dyn_object.kinematics.is_stationary;
 
   tracked_object.shape = dyn_object.shape;
+  // rotate POLYGON footprint from global-fixed orientation back to object-local frame
+  if (dyn_object.shape.type == autoware_perception_msgs::msg::Shape::POLYGON) {
+    const double yaw = tf2::getYaw(dyn_object.pose.orientation);
+    const float c = static_cast<float>(std::cos(yaw));
+    const float s = static_cast<float>(std::sin(yaw));
+    for (auto & pt : tracked_object.shape.footprint.points) {
+      const float x = c * pt.x + s * pt.y;
+      const float y = -s * pt.x + c * pt.y;
+      pt.x = x;
+      pt.y = y;
+    }
+  }
 
   return tracked_object;
 }
@@ -174,6 +190,18 @@ autoware_perception_msgs::msg::DetectedObject toDetectedObjectMsg(const DynamicO
   detected_object.kinematics.has_twist_covariance = true;
 
   detected_object.shape = dyn_object.shape;
+  // rotate POLYGON footprint from global-fixed orientation back to object-local frame
+  if (dyn_object.shape.type == autoware_perception_msgs::msg::Shape::POLYGON) {
+    const double yaw = tf2::getYaw(dyn_object.pose.orientation);
+    const float c = static_cast<float>(std::cos(yaw));
+    const float s = static_cast<float>(std::sin(yaw));
+    for (auto & pt : detected_object.shape.footprint.points) {
+      const float x = c * pt.x + s * pt.y;
+      const float y = -s * pt.x + c * pt.y;
+      pt.x = x;
+      pt.y = y;
+    }
+  }
 
   return detected_object;
 }

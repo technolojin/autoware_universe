@@ -213,18 +213,13 @@ bool convertConvexHullToBoundingBox(
     return false;
   }
 
-  // Transform ego position into the object's local frame for the ego-facing edge filter.
-  // Footprint points are defined in local frame (object-relative 2D coords).
+  // Transform ego position into global-fixed frame for the ego-facing edge filter.
+  // Footprint points are in global-fixed orientation (position-relative, not rotated by object yaw).
   double ego_local_x = 0.0, ego_local_y = 0.0;
   const bool use_ego = ego_pos.has_value();
   if (use_ego) {
-    const double yaw = tf2::getYaw(input_object.pose.orientation);
-    const double cos_yaw = std::cos(yaw);
-    const double sin_yaw = std::sin(yaw);
-    const double dgx = ego_pos->x - input_object.pose.position.x;
-    const double dgy = ego_pos->y - input_object.pose.position.y;
-    ego_local_x = cos_yaw * dgx + sin_yaw * dgy;
-    ego_local_y = -sin_yaw * dgx + cos_yaw * dgy;
+    ego_local_x = ego_pos->x - input_object.pose.position.x;
+    ego_local_y = ego_pos->y - input_object.pose.position.y;
   }
 
   const size_t n = points.size();
@@ -282,26 +277,23 @@ bool convertConvexHullToBoundingBox(
   const double dim_along = best_ext.max_along - best_ext.min_along;
   const double dim_perp = best_ext.max_lat - best_ext.min_lat;
 
-  // Bbox center in local frame: inverse of the normalized projection.
+  // Bbox center in global-fixed frame: inverse of the normalized projection.
   const double cu = (best_ext.min_along + best_ext.max_along) * 0.5;
   const double cv = (best_ext.min_lat + best_ext.max_lat) * 0.5;
   const double center_local_x = cu * cos_u - cv * sin_u;
   const double center_local_y = cu * sin_u + cv * cos_u;
 
-  const double bbox_yaw_local = std::atan2(ey, ex);
-
-  const double obj_yaw = tf2::getYaw(input_object.pose.orientation);
-  const double cos_yaw = std::cos(obj_yaw);
-  const double sin_yaw = std::sin(obj_yaw);
+  // Edge direction is already in global-fixed coords, so its angle is the global bbox orientation.
+  const double bbox_yaw = std::atan2(ey, ex);
 
   output_object = input_object;
 
-  // Rotate local center offset to global and add to object position
-  output_object.pose.position.x += cos_yaw * center_local_x - sin_yaw * center_local_y;
-  output_object.pose.position.y += sin_yaw * center_local_x + cos_yaw * center_local_y;
+  // Center offset is in global-fixed coords: add directly, no rotation needed.
+  output_object.pose.position.x += center_local_x;
+  output_object.pose.position.y += center_local_y;
 
-  // Set global bbox orientation (object yaw + edge yaw in local frame)
-  const double half = (obj_yaw + bbox_yaw_local) * 0.5;
+  // Set bbox orientation directly from the edge direction in global-fixed coords.
+  const double half = bbox_yaw * 0.5;
   output_object.pose.orientation.x = 0.0;
   output_object.pose.orientation.y = 0.0;
   output_object.pose.orientation.z = std::sin(half);
@@ -311,12 +303,10 @@ bool convertConvexHullToBoundingBox(
   output_object.shape.dimensions.x = dim_along;
   output_object.shape.dimensions.y = dim_perp;
 
-  // Shift footprint to new center and rotate into new object frame (which is rotated by bbox_yaw_local)
+  // Shift footprint to new center (global-fixed: translate only, no rotation).
   for (auto & point : output_object.shape.footprint.points) {
-    const float dx = point.x - static_cast<float>(center_local_x);
-    const float dy = point.y - static_cast<float>(center_local_y);
-    point.x = static_cast<float>(cos_u) * dx + static_cast<float>(sin_u) * dy;
-    point.y = -static_cast<float>(sin_u) * dx + static_cast<float>(cos_u) * dy;
+    point.x -= static_cast<float>(center_local_x);
+    point.y -= static_cast<float>(center_local_y);
   }
 
   return true;
@@ -331,9 +321,9 @@ std::optional<types::DynamicObject> alignClusterToOrientation(
     return std::nullopt;
   }
 
-  // Compose the two rotations (cluster local → map, map → target frame) into one.
-  const double phi = target_yaw - tf2::getYaw(cluster.pose.orientation);
-  const auto ext = computeOrientedExtent(cluster.shape.footprint.points, std::cos(phi), std::sin(phi));
+  // Footprint points are in global-fixed orientation: project directly onto target_yaw.
+  const auto ext = computeOrientedExtent(
+    cluster.shape.footprint.points, std::cos(target_yaw), std::sin(target_yaw));
 
   const double long_center = (ext.min_along + ext.max_along) * 0.5;
   const double lat_center = (ext.min_lat + ext.max_lat) * 0.5;
