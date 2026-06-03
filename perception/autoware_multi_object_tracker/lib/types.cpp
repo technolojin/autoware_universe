@@ -157,7 +157,7 @@ autoware_perception_msgs::msg::TrackedObject toTrackedObjectMsg(const DynamicObj
 
   tracked_object.shape = dyn_object.shape;
   // rotate POLYGON footprint from global-fixed orientation back to object-local frame
-  if (dyn_object.shape.type == autoware_perception_msgs::msg::Shape::POLYGON) {
+  if (dyn_object.shape.footprint.points.size() != 0) {
     const double yaw = tf2::getYaw(dyn_object.pose.orientation);
     const float c = static_cast<float>(std::cos(yaw));
     const float s = static_cast<float>(std::sin(yaw));
@@ -191,7 +191,7 @@ autoware_perception_msgs::msg::DetectedObject toDetectedObjectMsg(const DynamicO
 
   detected_object.shape = dyn_object.shape;
   // rotate POLYGON footprint from global-fixed orientation back to object-local frame
-  if (dyn_object.shape.type == autoware_perception_msgs::msg::Shape::POLYGON) {
+  if (dyn_object.shape.footprint.points.size() != 0) {
     const double yaw = tf2::getYaw(dyn_object.pose.orientation);
     const float c = static_cast<float>(std::cos(yaw));
     const float s = static_cast<float>(std::sin(yaw));

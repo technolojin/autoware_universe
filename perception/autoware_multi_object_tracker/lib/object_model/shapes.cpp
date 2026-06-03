@@ -321,13 +321,13 @@ std::optional<types::DynamicObject> alignClusterToOrientation(
     return std::nullopt;
   }
 
+  const double cos_tr = std::cos(target_yaw), sin_tr = std::sin(target_yaw);
   // Footprint points are in global-fixed orientation: project directly onto target_yaw.
   const auto ext = computeOrientedExtent(
-    cluster.shape.footprint.points, std::cos(target_yaw), std::sin(target_yaw));
+    cluster.shape.footprint.points, cos_tr, sin_tr);
 
   const double long_center = (ext.min_along + ext.max_along) * 0.5;
   const double lat_center = (ext.min_lat + ext.max_lat) * 0.5;
-  const double cos_tr = std::cos(target_yaw), sin_tr = std::sin(target_yaw);
 
   types::DynamicObject aligned = cluster;
   aligned.pose.position.x = cluster.pose.position.x + long_center * cos_tr - lat_center * sin_tr;

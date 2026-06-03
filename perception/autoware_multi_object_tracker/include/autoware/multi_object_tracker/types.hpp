@@ -249,6 +249,7 @@ struct DynamicObject
 
   // object extension (size and shape)
   autoware_perception_msgs::msg::Shape shape;
+  // orientation of polygon footprint is global-fixed, while the position is object-local
   bool trust_extension;
   double area;
 };
