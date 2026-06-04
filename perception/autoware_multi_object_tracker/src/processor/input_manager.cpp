@@ -259,6 +259,20 @@ void InputManager::init(const std::vector<types::InputChannel> & input_channels)
     RCLCPP_ERROR(logger_, "InputManager::init No spawn enabled input streams");
     return;
   }
+
+  // Initialize target stream to the first enabled stream so that processObjects() is triggered
+  // even when the leading channel slots are disabled ("none"). Without this, target_stream_idx_
+  // stays 0 and no incoming measurement ever satisfies (channel_index == target_stream_idx_).
+  for (const auto & input_stream : input_streams_) {
+    if (input_stream->isSpawnEnabled()) {
+      target_stream_idx_ = input_stream->getIndex();
+      RCLCPP_INFO(
+        logger_, "InputManager::init Initial target stream set to index %u",
+        target_stream_idx_);
+      break;
+    }
+  }
+
   is_initialized_ = true;
 }
 
