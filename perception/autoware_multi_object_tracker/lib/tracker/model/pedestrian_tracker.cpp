@@ -56,7 +56,7 @@ PedestrianTracker::PedestrianTracker(const rclcpp::Time & time, const types::Dyn
   object_.shape.type = Shape::BOUNDING_BOX;
   object_.shape.footprint.points.clear();
   // set maximum and minimum size
-  limitObjectExtension(object_model_);
+  // limitObjectExtension(object_model_);
 
   // Set motion model parameters
   {
@@ -149,23 +149,23 @@ bool PedestrianTracker::measureWithShape(
   const types::DynamicObject & object, const rclcpp::Time & time, const bool trust_extension)
 {
   using Shape = autoware_perception_msgs::msg::Shape;
-  const auto & sl = object_model_.size_limit;
-  const double len_max = sl.length_max * 1.5;
-  const double len_min = sl.length_min * 0.5;
-  const double wid_max = sl.width_max * 1.5;
-  const double wid_min = sl.width_min * 0.5;
-  const double hgt_max = sl.height_max * 1.5;
-  const double hgt_min = sl.height_min * 0.5;
+  // const auto & sl = object_model_.size_limit;
+  // const double len_max = sl.length_max * 1.5;
+  // const double len_min = sl.length_min * 0.5;
+  // const double wid_max = sl.width_max * 1.5;
+  // const double wid_min = sl.width_min * 0.5;
+  // const double hgt_max = sl.height_max * 1.5;
+  // const double hgt_min = sl.height_min * 0.5;
 
   if (object.shape.type == Shape::BOUNDING_BOX) {
     const double dim_x = object.shape.dimensions.x;
     const double dim_y = object.shape.dimensions.y;
     const double dim_z = object.shape.dimensions.z;
-    if (
-      dim_x > len_max || dim_x < len_min || dim_y > wid_max || dim_y < wid_min ||
-      dim_z > hgt_max || dim_z < hgt_min) {
-      return false;
-    }
+    // if (
+    //   dim_x > len_max || dim_x < len_min || dim_y > wid_max || dim_y < wid_min ||
+    //   dim_z > hgt_max || dim_z < hgt_min) {
+    //   return false;
+    // }
     const double gain = trust_extension ? 0.5 : 0.0;
     const double gain_inv = 1.0 - gain;
     object_.shape.dimensions.x = gain_inv * object_.shape.dimensions.x + gain * dim_x;
@@ -174,9 +174,9 @@ bool PedestrianTracker::measureWithShape(
   } else if (object.shape.type == Shape::CYLINDER) {
     const double diameter = std::max(object.shape.dimensions.x, object.shape.dimensions.y);
     const double dim_z = object.shape.dimensions.z;
-    if (diameter > wid_max || diameter < wid_min || dim_z > hgt_max || dim_z < hgt_min) {
-      return false;
-    }
+    // if (diameter > wid_max || diameter < wid_min || dim_z > hgt_max || dim_z < hgt_min) {
+    //   return false;
+    // }
     const double gain = trust_extension ? 0.5 : 0.0;
     const double gain_inv = 1.0 - gain;
     object_.shape.dimensions.x = gain_inv * object_.shape.dimensions.x + gain * diameter;
@@ -199,23 +199,25 @@ bool PedestrianTracker::measureWithShape(
     const double dim_x = aligned->shape.dimensions.x;
     const double dim_y = aligned->shape.dimensions.y;
     const double dim_z = aligned->shape.dimensions.z;
-    if (
-      dim_x > len_max || dim_x < len_min || dim_y > wid_max || dim_y < wid_min ||
-      dim_z > hgt_max || dim_z < hgt_min) {
-      return false;
-    }
+    // if (
+    //   dim_x > len_max || dim_x < len_min || dim_y > wid_max || dim_y < wid_min ||
+    //   dim_z > hgt_max || dim_z < hgt_min) {
+    //   return false;
+    // }
     // footprint is direct geometry — use low gain even when !trust_extension
-    const double gain = trust_extension ? 0.3 : 0.15;
+    const double gain = trust_extension ? 0.5 : 0.4;
     const double gain_inv = 1.0 - gain;
     object_.shape.dimensions.x = gain_inv * object_.shape.dimensions.x + gain * dim_x;
     object_.shape.dimensions.y = gain_inv * object_.shape.dimensions.y + gain * dim_y;
     object_.shape.dimensions.z = gain_inv * object_.shape.dimensions.z + gain * dim_z;
+
+    object_.shape.footprint= object.shape.footprint;
   }
 
   object_.shape.type = Shape::BOUNDING_BOX;
   object_.shape.footprint.points.clear();
   object_.area = types::getArea(object_.shape);
-  limitObjectExtension(object_model_);
+  // limitObjectExtension(object_model_);
   return true;
 }
 
@@ -284,35 +286,6 @@ bool PedestrianTracker::getTrackedObject(
         twist.linear.x =
           twist.linear.x > 0 ? twist.linear.x - vel_limit : twist.linear.x + vel_limit;
       }
-    }
-
-    // velocity-compensated footprint: inflate length to cover swept area since last measurement
-    const double dt = (time - getLatestMeasurementTime()).seconds();
-    const double vel = object.twist.linear.x;
-    const double inflation = std::max(0.0, vel * dt);
-    const bool apply_inflation = inflation > 0.05;
-
-    if (apply_inflation) {
-      const double yaw = tf2::getYaw(object.pose.orientation);
-      const double inflated_len = object.shape.dimensions.x + inflation;
-      const double clamped_len = std::min(inflated_len, object_model_.size_limit.length_max);
-      const double delta = clamped_len - object.shape.dimensions.x;
-      object.shape.dimensions.x = clamped_len;
-      object.pose.position.x += (delta / 2.0) * std::cos(yaw);
-      object.pose.position.y += (delta / 2.0) * std::sin(yaw);
-    }
-
-    // output type: CYLINDER when shape is nearly circular and there is no directional inflation
-    const double length = object.shape.dimensions.x;
-    const double width = object.shape.dimensions.y;
-    const double asymmetry = std::abs(length - width) / std::max(length, width);
-    if (asymmetry < 0.15 && !apply_inflation) {
-      object.shape.type = autoware_perception_msgs::msg::Shape::CYLINDER;
-      const double diameter = (length + width) / 2.0;
-      object.shape.dimensions.x = diameter;
-      object.shape.dimensions.y = diameter;
-    } else {
-      object.shape.type = autoware_perception_msgs::msg::Shape::BOUNDING_BOX;
     }
   }
 
