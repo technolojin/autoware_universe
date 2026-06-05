@@ -1,0 +1,42 @@
+autoware_system_design_format: 0.3.0
+
+# node information
+name: LabelBasedEuclideanCluster.node
+
+package:
+  name: autoware_euclidean_cluster
+  provider: autoware
+
+launch:
+  plugin: autoware::euclidean_cluster::LabelBasedEuclideanClusterNode
+  executable: label_based_euclidean_cluster_node
+  node_output: screen
+
+# interfaces
+subscribers:
+  - name: input_pointcloud
+    message_type: sensor_msgs/msg/PointCloud2
+    remap_target: input
+
+publishers:
+  - name: output_clusters
+    message_type: autoware_perception_msgs/msg/DetectedObjects
+    remap_target: output
+    qos:
+      reliability: reliable
+      durability: transient_local
+
+# parameters
+param_files:
+  - name: label_based_euclidean_param_path
+    default: config/label_based_euclidean_cluster.param.yaml
+
+param_values: []
+
+# processes
+processes:
+  - name: cluster
+    trigger_conditions:
+      - on_input: input_pointcloud
+    outcomes:
+      - to_output: output_clusters

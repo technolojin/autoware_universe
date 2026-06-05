@@ -1,0 +1,62 @@
+autoware_system_design_format: 0.3.0
+
+# node information
+name: LidarSegmentationPTv3.node
+
+package:
+  name: autoware_ptv3
+  provider: autoware
+
+launch:
+  plugin: autoware::ptv3::PTv3Node
+  executable: autoware_ptv3_node
+  node_output: screen
+
+# interfaces
+subscribers:
+  - name: pointcloud
+    message_type: sensor_msgs/msg/PointCloud2
+  - name: pointcloud/cuda
+    message_type: negotiated_interfaces/msg/NegotiatedTopicsInfo
+
+publishers:
+  - name: pointcloud/segmentation
+    message_type: sensor_msgs/msg/PointCloud2
+  - name: pointcloud/segmentation/cuda
+    message_type: negotiated_interfaces/msg/NegotiatedTopicsInfo
+  - name: pointcloud/visualization
+    message_type: sensor_msgs/msg/PointCloud2
+  - name: pointcloud/visualization/cuda
+    message_type: negotiated_interfaces/msg/NegotiatedTopicsInfo
+  - name: pointcloud/filtered
+    message_type: sensor_msgs/msg/PointCloud2
+  - name: pointcloud/filtered/cuda
+    message_type: negotiated_interfaces/msg/NegotiatedTopicsInfo
+
+# parameters
+param_files:
+  - name: model_param_path
+    default: config/ptv3.param.yaml
+    schema: schema/ptv3.schema.json
+    allow_substs: true
+  - name: ml_package_param_path
+    default: config/ml_package_ptv3.param.yaml
+    schema: schema/ml_package_ptv3.schema.json
+    allow_substs: true
+
+param_values:
+  - name: build_only
+    type: bool
+    default: false
+    description: If true, the node will only build the TensorRT engine and exit.
+
+# processes
+processes:
+  - name: segment
+    trigger_conditions:
+      - or:
+          - on_input: pointcloud
+    outcomes:
+      - to_output: pointcloud/segmentation
+      - to_output: pointcloud/visualization
+      - to_output: pointcloud/filtered
