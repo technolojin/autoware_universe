@@ -50,8 +50,7 @@ private:
   bool canMergeTarget(
     const Tracker & target, const Tracker & other, const rclcpp::Time & time,
     const AdaptiveThresholdCache & threshold_cache,
-    const std::optional<geometry_msgs::msg::Pose> & ego_pose,
-    types::ShapeType target_shape, types::ShapeType other_shape) const;
+    const std::optional<geometry_msgs::msg::Pose> & ego_pose) const;
 };
 
 }  // namespace autoware::multi_object_tracker

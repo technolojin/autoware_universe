@@ -46,8 +46,7 @@ TrackerOverlapManager::TrackerOverlapManager(const TrackerOverlapManagerConfig &
 bool TrackerOverlapManager::canMergeTarget(
   const Tracker & target, const Tracker & other, const rclcpp::Time & time,
   const AdaptiveThresholdCache & threshold_cache,
-  const std::optional<geometry_msgs::msg::Pose> & ego_pose,
-  types::ShapeType target_shape, types::ShapeType other_shape) const
+  const std::optional<geometry_msgs::msg::Pose> & ego_pose) const
 {
   // 0. Compare tracker priority: higher priority (lower index) is never absorbed
   if (target.getTrackerPriority() < other.getTrackerPriority()) {
@@ -59,16 +58,7 @@ bool TrackerOverlapManager::canMergeTarget(
     return false;
   }
 
-  // 2. Shape type priority: polygon-shaped target yields to structured-shape (bbox/cylinder) other,
-  //    regardless of class knowledge — mirrors the unknown-class absorption rule but at shape level
-  if (target_shape == types::ShapeType::POLYGON && other_shape != types::ShapeType::POLYGON) {
-    return true;
-  }
-  if (target_shape != types::ShapeType::POLYGON && other_shape == types::ShapeType::POLYGON) {
-    return false;
-  }
-
-  // 3. Compare known class probability
+  // 2. Compare known class probability
   const float target_known_prob = target.getKnownObjectProbability();
   const float other_known_prob = other.getKnownObjectProbability();
   constexpr float min_known_prob = 0.2;
@@ -104,7 +94,7 @@ bool TrackerOverlapManager::canMergeTarget(
     return target.getPositionCovarianceDeterminant() > other.getPositionCovarianceDeterminant();
   }
 
-  // 4. Target class is unknown
+  // 3. Target class is unknown
   if (other_known_prob < min_known_prob) {
     // Both unknown: remove the one with larger position uncertainty
     return target.getPositionCovarianceDeterminant() > other.getPositionCovarianceDeterminant();
@@ -126,7 +116,6 @@ void TrackerOverlapManager::merge(
     classes::Label label;
     bool is_unknown;
     int tracker_priority;
-    types::ShapeType shape_type;
     int measurement_count;
     double elapsed_time;
     bool is_valid;
@@ -137,7 +126,6 @@ void TrackerOverlapManager::merge(
       label(classes::Label::UNKNOWN),
       is_unknown(false),
       tracker_priority(0),
-      shape_type(types::ShapeType::POLYGON),
       measurement_count(0),
       elapsed_time(0.0),
       is_valid(false)
@@ -157,21 +145,17 @@ void TrackerOverlapManager::merge(
     data.label = tracker->getHighestProbLabel();
     data.is_unknown = (data.label == classes::Label::UNKNOWN);
     data.tracker_priority = tracker->getTrackerPriority();
-    data.shape_type = types::toShapeType(data.object.shape.type);
     data.measurement_count = tracker->getTotalMeasurementCount();
     data.elapsed_time = tracker->getElapsedTimeFromLastUpdate(time);
     data.is_valid = true;
     valid_trackers.push_back(std::move(data));
   }
 
-  // Sort by priority: tracker_priority → shape_type (bbox < cyl < polygon) → non-unknown → more measurements
+  // Sort by priority: lower index -> higher priority, then non-unknown, then more measurements
   std::sort(
     valid_trackers.begin(), valid_trackers.end(), [](const TrackerData & a, const TrackerData & b) {
       if (a.tracker_priority != b.tracker_priority) {
         return a.tracker_priority < b.tracker_priority;
-      }
-      if (a.shape_type != b.shape_type) {
-        return static_cast<uint8_t>(a.shape_type) < static_cast<uint8_t>(b.shape_type);
       }
       if (a.is_unknown != b.is_unknown) {
         return b.is_unknown;  // Non-unknown first
@@ -223,9 +207,7 @@ void TrackerOverlapManager::merge(
       if (!data2.is_valid) continue;
 
       if (
-        canMergeTarget(
-          *data2.tracker, *data1.tracker, time, threshold_cache, ego_pose, data2.shape_type,
-          data1.shape_type) &&
+        canMergeTarget(*data2.tracker, *data1.tracker, time, threshold_cache, ego_pose) &&
         isRedundant(
           data1.object, data2.object, data1.label, data2.label,
           data1.tracker->getKnownObjectProbability(), data2.tracker->getKnownObjectProbability(),
