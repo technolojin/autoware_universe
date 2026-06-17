@@ -6,6 +6,12 @@
     "input_channel": {
       "type": "object",
       "properties": {
+        "input_type": {
+          "type": "string",
+          "enum": ["DetectedObjects", "TrackedObjects"],
+          "description": "Type of the input message carried by this channel. 'DetectedObjects': detection results. 'TrackedObjects': tracking results.",
+          "default": "DetectedObjects"
+        },
         "associator_type": {
           "type": "string",
           "enum": ["bev", "polar"],
