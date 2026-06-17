@@ -134,6 +134,68 @@ std::optional<size_t> DynamicObjectList::getObjectIndexByUuid(
   return std::nullopt;
 }
 
+DynamicObject toDynamicObject(
+  const autoware_perception_msgs::msg::TrackedObject & trk_object, const uint channel_index)
+{
+  DynamicObject dynamic_object;
+
+  // Always generate a fresh internal UUID; carry the upstream object_id as source_uuid so that
+  // association can resolve identity deterministically (see AssociationManager UUID resolution).
+  dynamic_object.uuid = object_model::generate_uuid();
+  dynamic_object.source_uuid = trk_object.object_id;
+  dynamic_object.has_source_uuid = true;
+
+  // initialize existence_probabilities, using channel information
+  dynamic_object.channel_index = channel_index;
+  if (trk_object.existence_probability < 1e-6) {
+    // given existence probability is too low, may the value is not set
+    dynamic_object.existence_probability = default_existence_probability;
+  } else if (trk_object.existence_probability > 0.999) {
+    // given existence probability is too high, may the value is not set
+    dynamic_object.existence_probability = 0.999;
+  } else {
+    dynamic_object.existence_probability = trk_object.existence_probability;
+  }
+  dynamic_object.existence_probabilities.push_back(
+    {channel_index, dynamic_object.existence_probability});
+
+  dynamic_object.classification = classes::toClassifications(trk_object.classification);
+
+  dynamic_object.pose = trk_object.kinematics.pose_with_covariance.pose;
+  dynamic_object.pose_covariance = trk_object.kinematics.pose_with_covariance.covariance;
+  dynamic_object.twist = trk_object.kinematics.twist_with_covariance.twist;
+  dynamic_object.twist_covariance = trk_object.kinematics.twist_with_covariance.covariance;
+
+  // TrackedObjectKinematics carries no has_* flags: a tracked object always provides a populated
+  // pose covariance and twist (with covariance).
+  dynamic_object.kinematics.has_position_covariance = true;
+  dynamic_object.kinematics.orientation_availability =
+    convertOrientationAvailabilityFromMsg(trk_object.kinematics.orientation_availability);
+  dynamic_object.kinematics.has_twist = true;
+  dynamic_object.kinematics.has_twist_covariance = true;
+  dynamic_object.kinematics.is_stationary = trk_object.kinematics.is_stationary;
+
+  // shape
+  dynamic_object.shape = trk_object.shape;
+  dynamic_object.area = getArea(trk_object.shape);
+
+  return dynamic_object;
+}
+
+DynamicObjectList toDynamicObjectList(
+  const autoware_perception_msgs::msg::TrackedObjects & trk_objects, const uint channel_index)
+{
+  DynamicObjectList dynamic_objects;
+  dynamic_objects.header = trk_objects.header;
+  dynamic_objects.channel_index = channel_index;
+  dynamic_objects.objects.reserve(trk_objects.objects.size());
+  for (const auto & trk_object : trk_objects.objects) {
+    dynamic_objects.objects.emplace_back(toDynamicObject(trk_object, channel_index));
+  }
+  dynamic_objects.buildUuidIndex();
+  return dynamic_objects;
+}
+
 autoware_perception_msgs::msg::TrackedObject toTrackedObjectMsg(const DynamicObject & dyn_object)
 {
   autoware_perception_msgs::msg::TrackedObject tracked_object;

@@ -167,9 +167,13 @@ std::optional<autoware_perception_msgs::msg::DetectedObjects> get_merged_objects
 }
 
 //// Low-level processing functions
-MeasurementProcessingResult process_measurement(
-  const size_t channel_index,
-  AUTOWARE_MESSAGE_CONST_SHARED_PTR(autoware_perception_msgs::msg::DetectedObjects) msg,
+namespace
+{
+// Message-type-agnostic tail shared by both process_measurement overloads. `objects` is the
+// channel's DynamicObjectList already normalized/transformed by the InputManager. associate() is a
+// pure read against the current tracker snapshot; all mutation is deferred to the batch path.
+MeasurementProcessingResult finalize_measurement(
+  const size_t channel_index, const std::optional<types::DynamicObjectList> & objects,
   const rclcpp::Time & current_time, MultiObjectTrackerInternalState & state,
   TrackerDebugger & debugger)
 {
@@ -177,7 +181,6 @@ MeasurementProcessingResult process_measurement(
   result.has_objects = false;
   result.should_process = false;
 
-  const auto objects = state.input_manager->processMessage(channel_index, msg);
   if (!objects) {
     return result;
   }
@@ -205,6 +208,27 @@ MeasurementProcessingResult process_measurement(
     measurement_time, state.processor->getListTracker(), associated_objects);
 
   return result;
+}
+}  // namespace
+
+MeasurementProcessingResult process_measurement(
+  const size_t channel_index,
+  AUTOWARE_MESSAGE_CONST_SHARED_PTR(autoware_perception_msgs::msg::DetectedObjects) msg,
+  const rclcpp::Time & current_time, MultiObjectTrackerInternalState & state,
+  TrackerDebugger & debugger)
+{
+  const auto objects = state.input_manager->processMessage(channel_index, msg);
+  return finalize_measurement(channel_index, objects, current_time, state, debugger);
+}
+
+MeasurementProcessingResult process_measurement(
+  const size_t channel_index,
+  AUTOWARE_MESSAGE_CONST_SHARED_PTR(autoware_perception_msgs::msg::TrackedObjects) msg,
+  const rclcpp::Time & current_time, MultiObjectTrackerInternalState & state,
+  TrackerDebugger & debugger)
+{
+  const auto objects = state.input_manager->processMessage(channel_index, msg);
+  return finalize_measurement(channel_index, objects, current_time, state, debugger);
 }
 
 void process_objects_(

@@ -70,11 +70,23 @@ void InputStream::push(
 std::optional<types::DynamicObjectList> InputStream::processMessage(
   AUTOWARE_MESSAGE_CONST_SHARED_PTR(autoware_perception_msgs::msg::DetectedObjects) msg)
 {
-  const autoware_perception_msgs::msg::DetectedObjects & objects = *msg;
-  const rclcpp::Time timestamp = objects.header.stamp;
+  types::DynamicObjectList dynamic_objects = types::toDynamicObjectList(*msg, channel_.index);
+  return finalize(dynamic_objects);
+}
 
-  types::DynamicObjectList dynamic_objects = types::toDynamicObjectList(objects, channel_.index);
+std::optional<types::DynamicObjectList> InputStream::processMessage(
+  AUTOWARE_MESSAGE_CONST_SHARED_PTR(autoware_perception_msgs::msg::TrackedObjects) msg)
+{
+  // TrackedObjects carry an upstream object_id; toDynamicObjectList stamps it as source_uuid so the
+  // association stage can resolve identity deterministically. The remaining processing is identical
+  // to the DetectedObjects path.
+  types::DynamicObjectList dynamic_objects = types::toDynamicObjectList(*msg, channel_.index);
+  return finalize(dynamic_objects);
+}
 
+std::optional<types::DynamicObjectList> InputStream::finalize(
+  types::DynamicObjectList & dynamic_objects)
+{
   // Set trust_extension information from channel configuration
   for (auto & object : dynamic_objects.objects) {
     object.trust_extension = channel_.trust_extension;
@@ -278,6 +290,19 @@ void InputManager::push(
 std::optional<types::DynamicObjectList> InputManager::processMessage(
   const size_t channel_index,
   AUTOWARE_MESSAGE_CONST_SHARED_PTR(autoware_perception_msgs::msg::DetectedObjects) msg)
+{
+  if (channel_index >= input_streams_.size()) {
+    RCLCPP_WARN(
+      logger_, "InputManager::processMessage Invalid channel index: %lu, input_streams_ size: %lu",
+      channel_index, input_streams_.size());
+    return std::nullopt;
+  }
+  return input_streams_.at(channel_index)->processMessage(msg);
+}
+
+std::optional<types::DynamicObjectList> InputManager::processMessage(
+  const size_t channel_index,
+  AUTOWARE_MESSAGE_CONST_SHARED_PTR(autoware_perception_msgs::msg::TrackedObjects) msg)
 {
   if (channel_index >= input_streams_.size()) {
     RCLCPP_WARN(

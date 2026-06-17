@@ -18,6 +18,11 @@
           "description": "Association algorithm for this channel. 'bev': bird's-eye-view area scoring with GNN assignment. 'polar': polar-coordinate (range-bearing) scoring.",
           "default": "bev"
         },
+        "source_uuid_timeout_sec": {
+          "type": "number",
+          "description": "For 'TrackedObjects' channels only: lifetime (seconds) of a per-tracker upstream source-UUID binding after its last sighting. While valid, a measurement carrying that UUID re-associates deterministically to the same tracker; once it expires the binding is dropped (guards against upstream UUID recycling / source dropout). Ignored for 'DetectedObjects' channels.",
+          "default": 2.0
+        },
         "flags": {
           "type": "object",
           "properties": {

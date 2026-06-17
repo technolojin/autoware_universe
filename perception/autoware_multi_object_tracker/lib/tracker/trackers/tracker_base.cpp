@@ -71,6 +71,15 @@ Tracker::Tracker(const rclcpp::Time & time, const types::DynamicObject & detecte
   classification_ = detected_object.classification;
 }
 
+void Tracker::pruneStaleSourceBindings(const rclcpp::Time & now)
+{
+  source_bindings_.erase(
+    std::remove_if(
+      source_bindings_.begin(), source_bindings_.end(),
+      [&now](const types::SourceBinding & binding) { return binding.isStale(now); }),
+    source_bindings_.end());
+}
+
 void Tracker::initializeExistenceProbabilities(
   const uint & channel_index, const float & existence_probability)
 {

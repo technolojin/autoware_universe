@@ -85,6 +85,22 @@ input/detection07/channel: none # Disabled
 
 Up to 12 detection inputs can be configured (detection01 through detection12). Each input consists of an objects topic and its corresponding channel configuration.
 
+#### TrackedObjects inputs and UUID-based association
+
+A channel may carry `autoware_perception_msgs::msg::TrackedObjects` instead of `DetectedObjects` by
+setting its `input_type` to `TrackedObjects` (see the channel parameters below). The subscribed topic
+name is identical (`input/detection**/objects`); only the message type changes.
+
+For such channels the upstream track's `object_id` is preserved as the measurement's source UUID and
+used to associate deterministically: a measurement re-associates to whichever tracker it last bound
+to on that channel, without relying on geometry. Measurements with no matching binding (a new
+upstream track, or the same physical object seen first through another source) fall back to the
+channel's geometric associator, and the resulting match is then bound so it persists. A tracker can
+hold one binding per channel simultaneously, which is how the same physical object fused from several
+sources resolves to a single tracker. Each binding expires `source_uuid_timeout_sec` after its last
+sighting, guarding against upstream UUID recycling or a source dropping out; expiring a binding never
+removes the tracker itself.
+
 ### Output
 
 | Name       | Type                                            | Description     |

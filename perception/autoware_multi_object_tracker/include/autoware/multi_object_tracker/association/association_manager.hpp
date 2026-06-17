@@ -60,6 +60,16 @@ private:
   /// polar_viable: false forces BEV fallback regardless of channel config.
   AssociationBase & getAssociationForChannel(uint channel_index, bool polar_viable) const;
 
+  /// Resolve a TrackedObjects channel deterministically by upstream source UUID, then fall back to
+  /// the channel's geometric associator for the residual (cross-source fusion / new upstream
+  /// tracks). Pure read over the tracker snapshot: builds a transient per-channel UUID -> tracker
+  /// index from each tracker's bindings every call (no shared mutable state -> lock-free across
+  /// parallel associators), adds the UUID-matched pairs, and runs geometry only on what is left.
+  types::AssociationResult associateTrackedByUuid(
+    const types::DynamicObjectList & measurements,
+    const std::list<std::shared_ptr<Tracker>> & trackers, AssociationBase & geometric_associator,
+    const rclcpp::Time & measurement_time) const;
+
   /// Returns true when ego_pose is present and fresh enough relative to measurement_time.
   bool isPolarViable(
     const std::optional<geometry_msgs::msg::PoseStamped> & ego_pose,

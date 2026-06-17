@@ -34,6 +34,7 @@
 #include <unique_identifier_msgs/msg/uuid.hpp>
 
 #include <boost/circular_buffer.hpp>
+#include <boost/container/small_vector.hpp>
 
 #include <array>
 #include <optional>
@@ -157,6 +158,40 @@ public:
 
   unique_identifier_msgs::msg::UUID getUUID() const { return uuid_; }
 
+  // Per-source identity bindings (upstream UUID -> this tracker, per input channel). Populated only
+  // from TrackedObjects inputs. A tracker holds at most one binding per channel; bindings from
+  // several channels express cross-source fusion. See SourceBinding in types.hpp.
+  const boost::container::small_vector<types::SourceBinding, 2> & getSourceBindings() const
+  {
+    return source_bindings_;
+  }
+
+  // Bind (or refresh) the upstream identity for `channel`. Find-or-update by channel so there is at
+  // most one binding per channel. A fresh binding whose upstream id differs from `uuid` is NOT
+  // overwritten — a UUID binding beats geometry, so a geometric (re)match cannot steal a slot that
+  // still holds a live upstream id. An empty or stale slot is (over)written.
+  void bindSource(
+    const uint channel, const unique_identifier_msgs::msg::UUID & uuid, const rclcpp::Time & t,
+    const double timeout_sec)
+  {
+    for (auto & binding : source_bindings_) {
+      if (binding.channel != channel) continue;
+      if (!binding.isStale(t) && !types::UUIDEqual{}(binding.uuid, uuid)) {
+        return;  // fresh slot with a different upstream id — keep existing identity
+      }
+      binding.uuid = uuid;
+      binding.last_seen = t;
+      binding.timeout_sec = timeout_sec;
+      return;
+    }
+    source_bindings_.push_back(types::SourceBinding{channel, uuid, t, timeout_sec});
+  }
+
+  // Drop bindings whose upstream source has gone silent past their timeout. Dropping a binding does
+  // NOT kill the tracker (other channels may still feed it / it lives via the normal expiry path);
+  // it only stops stale upstream ids — recycled or dropped — from matching in association.
+  void pruneStaleSourceBindings(const rclcpp::Time & now);
+
   std::string getUuidString() const
   {
     const auto uuid_msg = uuid_;
@@ -180,6 +215,10 @@ protected:
   // (getShapeModel()); kinematics (pose/twist/covariances) are owned by the motion model and
   // supplied on demand via getMotionState() — the motion model is the single source of truth.
   unique_identifier_msgs::msg::UUID uuid_;
+  // Upstream identity bindings (see getSourceBindings()/bindSource()). 0-1 entries in the common
+  // case (no TrackedObjects input, or single-source), so the inline capacity of 2 avoids any heap
+  // allocation for the overwhelming majority of trackers.
+  boost::container::small_vector<types::SourceBinding, 2> source_bindings_;
   uint channel_index_{0};
   float existence_probability_{types::default_existence_probability};
   types::ObjectKinematics kinematics_{};  // output metadata flags (orientation_availability, ...)

@@ -21,6 +21,8 @@
 #include <limits>
 #include <list>
 #include <memory>
+#include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -80,8 +82,100 @@ types::AssociationResult AssociationManager::associate(
       dt, ego_pose_max_age_sec_);
   }
 
-  return getAssociationForChannel(measurements.channel_index, polar_viable)
-    .associate(measurements, trackers);
+  AssociationBase & geometric_associator =
+    getAssociationForChannel(measurements.channel_index, polar_viable);
+
+  // DetectedObjects channels carry no stable upstream id: associate purely geometrically as before.
+  const auto & channel = channels_config_[measurements.channel_index];
+  if (channel.type != types::InputMessageType::TRACKED_OBJECTS) {
+    return geometric_associator.associate(measurements, trackers);
+  }
+
+  // TrackedObjects channel: resolve identity by upstream UUID first, geometry fills the rest.
+  return associateTrackedByUuid(measurements, trackers, geometric_associator, meas_time);
+}
+
+types::AssociationResult AssociationManager::associateTrackedByUuid(
+  const types::DynamicObjectList & measurements,
+  const std::list<std::shared_ptr<Tracker>> & trackers, AssociationBase & geometric_associator,
+  const rclcpp::Time & measurement_time) const
+{
+  const uint channel_index = measurements.channel_index;
+
+  // Build the transient per-channel lookup from the snapshot's (non-stale) bindings. Rebuilt every
+  // call on purpose: no shared mutable index -> lock-free across parallel associators.
+  std::unordered_map<
+    unique_identifier_msgs::msg::UUID, Tracker *, types::UUIDHash, types::UUIDEqual>
+    uuid_to_tracker;
+  for (const auto & tracker : trackers) {
+    for (const auto & binding : tracker->getSourceBindings()) {
+      if (binding.channel == channel_index && !binding.isStale(measurement_time)) {
+        uuid_to_tracker[binding.uuid] = tracker.get();
+      }
+    }
+  }
+
+  types::AssociationResult result;
+
+  // Resolve UUID matches. A tracker can be claimed by at most one measurement per batch.
+  std::unordered_set<const Tracker *> matched_trackers;
+  std::vector<bool> measurement_matched(measurements.objects.size(), false);
+  if (!uuid_to_tracker.empty()) {
+    for (size_t i = 0; i < measurements.objects.size(); ++i) {
+      const auto & measurement = measurements.objects[i];
+      if (!measurement.has_source_uuid) continue;
+      const auto it = uuid_to_tracker.find(measurement.source_uuid);
+      if (it == uuid_to_tracker.end()) continue;
+      const Tracker * tracker = it->second;
+      if (matched_trackers.count(tracker)) continue;
+      result.add(tracker->getUUID(), measurement.uuid);
+      matched_trackers.insert(tracker);
+      measurement_matched[i] = true;
+    }
+  }
+
+  // Build residuals (everything not UUID-matched) for the geometric fallback.
+  types::DynamicObjectList residual_measurements;
+  residual_measurements.header = measurements.header;
+  residual_measurements.channel_index = measurements.channel_index;
+  for (size_t i = 0; i < measurements.objects.size(); ++i) {
+    if (!measurement_matched[i]) {
+      residual_measurements.objects.push_back(measurements.objects[i]);
+    }
+  }
+  residual_measurements.buildUuidIndex();
+
+  std::list<std::shared_ptr<Tracker>> residual_trackers;
+  for (const auto & tracker : trackers) {
+    if (!matched_trackers.count(tracker.get())) {
+      residual_trackers.push_back(tracker);
+    }
+  }
+
+  // Fast exit: nothing left for geometry (steady state — every measurement matched a binding).
+  if (residual_measurements.objects.empty()) {
+    result.unassigned_trackers.reserve(residual_trackers.size());
+    for (const auto & tracker : residual_trackers) {
+      result.unassigned_trackers.push_back(tracker->getUUID());
+    }
+    return result;
+  }
+
+  const types::AssociationResult geometric_result =
+    geometric_associator.associate(residual_measurements, residual_trackers);
+
+  // Merge geometric pairs and metadata into the UUID-resolved result. Residuals exclude the
+  // UUID-matched trackers/measurements, so the assigned/unassigned sets compose without overlap.
+  for (const auto & [tracker_uuid, measurement_uuid] : geometric_result.tracker_to_measurement) {
+    result.add(tracker_uuid, measurement_uuid);
+  }
+  for (const auto & tracker_uuid : geometric_result.trackers_with_shape_change) {
+    result.trackers_with_shape_change.insert(tracker_uuid);
+  }
+  result.unassigned_trackers = geometric_result.unassigned_trackers;
+  result.unassigned_measurements = geometric_result.unassigned_measurements;
+
+  return result;
 }
 
 void AssociationManager::setTimeKeeper(

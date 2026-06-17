@@ -122,6 +122,16 @@ void TrackerProcessor::update(const types::AssociatedObjects & associated_object
       (*(tracker_itr))
         ->updateWithMeasurement(
           associated_object, time, channel_info, has_significant_shape_change);
+
+      // Refresh / record the upstream identity binding for this channel. For a UUID-resolved match
+      // this refreshes last_seen; for a geometric cross-source match it fills the (empty/stale)
+      // channel slot. bindSource() refuses to overwrite a still-live binding (TrackedObjects only).
+      if (associated_object.has_source_uuid) {
+        (*tracker_itr)
+          ->bindSource(
+            associated_object.channel_index, associated_object.source_uuid, rclcpp::Time(time),
+            channels_config_[associated_object.channel_index].source_timeout_sec);
+      }
     } else {
       (*(tracker_itr))->updateWithoutMeasurement(time);
     }
@@ -149,6 +159,14 @@ void TrackerProcessor::spawn(const types::AssociatedObjects & associated_objects
     }
     std::shared_ptr<Tracker> tracker = createNewTracker(new_object, time);
     if (!tracker) continue;  // null combo: (shape, label) not accepted
+
+    // Record the upstream identity so subsequent batches on this channel re-associate to the same
+    // tracker deterministically by source UUID (TrackedObjects inputs only).
+    if (new_object.has_source_uuid) {
+      tracker->bindSource(
+        new_object.channel_index, new_object.source_uuid, rclcpp::Time(time),
+        channels_config_[new_object.channel_index].source_timeout_sec);
+    }
 
     if (channel_config.trust_existence_probability) {
       tracker->initializeExistenceProbabilities(
@@ -218,6 +236,13 @@ void TrackerProcessor::prune(const rclcpp::Time & time)
   }
 
   removeOldTracker(time);
+
+  // Age out source-UUID bindings whose upstream track has gone silent. This does not remove the
+  // tracker itself (handled by removeOldTracker) — it only stops stale upstream ids from matching.
+  for (const auto & tracker : list_tracker_) {
+    tracker->pruneStaleSourceBindings(time);
+  }
+
   tracker_overlap_manager_->merge(list_tracker_, time, adaptive_threshold_cache_, getEgoPose());
 
   last_prune_time_ = time;

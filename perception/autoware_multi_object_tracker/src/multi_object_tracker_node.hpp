@@ -40,8 +40,12 @@ public:
 
 private:
   // ROS interface
+  // One subscription slot per input channel. A channel uses exactly one of these, selected by its
+  // configured input_type (DetectedObjects vs TrackedObjects); the other stays null.
   std::vector<AUTOWARE_SUBSCRIPTION_PTR(autoware_perception_msgs::msg::DetectedObjects)>
     sub_objects_array_{};
+  std::vector<AUTOWARE_SUBSCRIPTION_PTR(autoware_perception_msgs::msg::TrackedObjects)>
+    sub_tracked_objects_array_{};
 
   AUTOWARE_PUBLISHER_PTR(autoware_perception_msgs::msg::TrackedObjects) tracked_objects_pub_;
   AUTOWARE_PUBLISHER_PTR(autoware_perception_msgs::msg::DetectedObjects) merged_objects_pub_;
@@ -69,6 +73,9 @@ private:
   void onMeasurement(
     const size_t channel_index,
     AUTOWARE_MESSAGE_CONST_SHARED_PTR(autoware_perception_msgs::msg::DetectedObjects) msg);
+  void onMeasurement(
+    const size_t channel_index,
+    AUTOWARE_MESSAGE_CONST_SHARED_PTR(autoware_perception_msgs::msg::TrackedObjects) msg);
 
   // publish processes
   void publish();

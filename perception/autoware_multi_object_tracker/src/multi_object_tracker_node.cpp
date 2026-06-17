@@ -143,6 +143,10 @@ MultiObjectTracker::MultiObjectTracker(const rclcpp::NodeOptions & node_options)
                                                  : types::AssociationType::BEV;
       }
 
+      // TrackedObjects-only: lifetime of a per-tracker source-UUID binding after its last sighting
+      input_channel_config.source_timeout_sec =
+        declare_parameter<double>(input_channel_config_name + ".source_uuid_timeout_sec", 2.0);
+
       // optional parameters
       const std::string default_name = input_channel;
       const std::string name_long =
@@ -269,6 +273,7 @@ MultiObjectTracker::MultiObjectTracker(const rclcpp::NodeOptions & node_options)
   ////// Create subscriptions and publishers
   // subscriptions
   sub_objects_array_.resize(params_.input_channels_config.size());
+  sub_tracked_objects_array_.resize(params_.input_channels_config.size());
   for (const auto & input_channel : params_.input_channels_config) {
     if (!input_channel.is_enabled) {
       continue;
@@ -279,12 +284,23 @@ MultiObjectTracker::MultiObjectTracker(const rclcpp::NodeOptions & node_options)
     oss << "~/input/detection" << std::setfill('0') << std::setw(2) << (index + 1) << "/objects";
     std::string input_channel_topic = oss.str();
 
-    sub_objects_array_.at(index) =
-      create_subscription<autoware_perception_msgs::msg::DetectedObjects>(
-        input_channel_topic, rclcpp::QoS{1},
-        [this,
-         index](AUTOWARE_MESSAGE_CONST_SHARED_PTR(autoware_perception_msgs::msg::DetectedObjects)
-                  msg) { this->onMeasurement(index, std::move(msg)); });
+    // The topic name is identical for both message types; only the message type subscribed to
+    // depends on the channel's configured input_type.
+    if (input_channel.type == types::InputMessageType::TRACKED_OBJECTS) {
+      sub_tracked_objects_array_.at(index) =
+        create_subscription<autoware_perception_msgs::msg::TrackedObjects>(
+          input_channel_topic, rclcpp::QoS{1},
+          [this,
+           index](AUTOWARE_MESSAGE_CONST_SHARED_PTR(autoware_perception_msgs::msg::TrackedObjects)
+                    msg) { this->onMeasurement(index, std::move(msg)); });
+    } else {
+      sub_objects_array_.at(index) =
+        create_subscription<autoware_perception_msgs::msg::DetectedObjects>(
+          input_channel_topic, rclcpp::QoS{1},
+          [this,
+           index](AUTOWARE_MESSAGE_CONST_SHARED_PTR(autoware_perception_msgs::msg::DetectedObjects)
+                    msg) { this->onMeasurement(index, std::move(msg)); });
+    }
   }
 
   // publishers
@@ -324,6 +340,26 @@ MultiObjectTracker::MultiObjectTracker(const rclcpp::NodeOptions & node_options)
 void MultiObjectTracker::onMeasurement(
   const size_t channel_index,
   AUTOWARE_MESSAGE_CONST_SHARED_PTR(autoware_perception_msgs::msg::DetectedObjects) msg)
+{
+  std::unique_ptr<ScopedTimeTrack> st_ptr;
+  if (time_keeper_) st_ptr = std::make_unique<ScopedTimeTrack>(__func__, *time_keeper_);
+
+  const rclcpp::Time current_time = this->now();
+  const auto result =
+    core::process_measurement(channel_index, msg, current_time, state_, *debugger_);
+
+  if (!result.has_objects) {
+    return;
+  }
+
+  if (result.should_process) {
+    processObjects();
+  }
+}
+
+void MultiObjectTracker::onMeasurement(
+  const size_t channel_index,
+  AUTOWARE_MESSAGE_CONST_SHARED_PTR(autoware_perception_msgs::msg::TrackedObjects) msg)
 {
   std::unique_ptr<ScopedTimeTrack> st_ptr;
   if (time_keeper_) st_ptr = std::make_unique<ScopedTimeTrack>(__func__, *time_keeper_);

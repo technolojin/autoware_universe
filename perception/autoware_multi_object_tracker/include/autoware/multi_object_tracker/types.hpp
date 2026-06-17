@@ -25,6 +25,7 @@
 #include <autoware_perception_msgs/msg/shape.hpp>
 #include <autoware_perception_msgs/msg/tracked_object.hpp>
 #include <autoware_perception_msgs/msg/tracked_object_kinematics.hpp>
+#include <autoware_perception_msgs/msg/tracked_objects.hpp>
 #include <geometry_msgs/msg/point.hpp>
 #include <geometry_msgs/msg/polygon.hpp>
 #include <geometry_msgs/msg/pose_with_covariance.hpp>
@@ -224,17 +225,20 @@ enum class InputMessageType : std::uint8_t {
 // channel configuration
 struct InputChannel
 {
-  uint index;                                              // index of the channel
+  uint index;                                                  // index of the channel
   InputMessageType type = InputMessageType::DETECTED_OBJECTS;  // type of the input message
-  bool is_enabled = true;                                  // enable the channel
-  std::string long_name = "Detected Object";               // full name of the detection
-  std::string short_name = "DET";                          // abbreviation of the name
-  bool is_spawn_enabled = true;                            // enable spawn of the object
-  bool trust_existence_probability = false;                // trust object existence probability
-  bool trust_extension = true;                             // trust object extension
-  bool trust_classification = true;                        // trust object classification
-  bool trust_orientation = true;                           // trust object orientation(yaw)
-  AssociationType associator_type = AssociationType::BEV;  // which associator to use
+  bool is_enabled = true;                                      // enable the channel
+  std::string long_name = "Detected Object";                   // full name of the detection
+  std::string short_name = "DET";                              // abbreviation of the name
+  bool is_spawn_enabled = true;                                // enable spawn of the object
+  bool trust_existence_probability = false;                    // trust object existence probability
+  bool trust_extension = true;                                 // trust object extension
+  bool trust_classification = true;                            // trust object classification
+  bool trust_orientation = true;                               // trust object orientation(yaw)
+  AssociationType associator_type = AssociationType::BEV;      // which associator to use
+  // For TrackedObjects channels only: how long (seconds) a per-tracker source-UUID binding remains
+  // valid after its last sighting. Guards against upstream UUID recycling / source dropout.
+  double source_timeout_sec = 2.0;
 };
 
 struct ExistenceProbability
@@ -267,6 +271,12 @@ struct DynamicObject
   // identification
   unique_identifier_msgs::msg::UUID uuid = unique_identifier_msgs::msg::UUID();
 
+  // upstream identity (only set for TrackedObjects inputs). `uuid` is always a freshly generated
+  // internal id; `source_uuid` carries the upstream track's object_id so association can resolve
+  // identity deterministically. has_source_uuid stays false for DetectedObjects inputs.
+  unique_identifier_msgs::msg::UUID source_uuid = unique_identifier_msgs::msg::UUID();
+  bool has_source_uuid = false;
+
   // existence information
   uint channel_index;
   float existence_probability;
@@ -286,6 +296,21 @@ struct DynamicObject
   autoware_perception_msgs::msg::Shape shape;
   bool trust_extension;
   double area;
+};
+
+// Per-source identity binding held ON a Tracker. Maps an upstream track (identified by `uuid`
+// within input channel `channel`) to this tracker. A tracker can hold at most one binding per
+// channel; holding bindings from several channels expresses cross-source fusion. `last_seen` and
+// `timeout_sec` (copied from the channel config at bind time) drive per-binding aging so that
+// upstream UUID recycling or a dropped source cannot keep matching a stale id.
+struct SourceBinding
+{
+  uint channel;
+  unique_identifier_msgs::msg::UUID uuid;
+  rclcpp::Time last_seen;
+  double timeout_sec;
+
+  bool isStale(const rclcpp::Time & now) const { return (now - last_seen).seconds() > timeout_sec; }
 };
 
 struct UUIDHash
@@ -435,6 +460,15 @@ DynamicObject toDynamicObject(
 
 DynamicObjectList toDynamicObjectList(
   const autoware_perception_msgs::msg::DetectedObjects & det_objects, const uint channel_index = 0);
+
+// TrackedObjects input variant: carries the upstream object_id as source_uuid (has_source_uuid =
+// true) so identity can be resolved deterministically. The internal `uuid` is still freshly
+// generated, identical to the DetectedObject path.
+DynamicObject toDynamicObject(
+  const autoware_perception_msgs::msg::TrackedObject & trk_object, const uint channel_index = 0);
+
+DynamicObjectList toDynamicObjectList(
+  const autoware_perception_msgs::msg::TrackedObjects & trk_objects, const uint channel_index = 0);
 
 autoware_perception_msgs::msg::TrackedObject toTrackedObjectMsg(const DynamicObject & dyn_object);
 autoware_perception_msgs::msg::DetectedObject toDetectedObjectMsg(const DynamicObject & dyn_object);

@@ -130,6 +130,12 @@ MeasurementProcessingResult process_measurement(
   const rclcpp::Time & current_time, MultiObjectTrackerInternalState & state,
   TrackerDebugger & debugger);
 
+MeasurementProcessingResult process_measurement(
+  const size_t channel_index,
+  AUTOWARE_MESSAGE_CONST_SHARED_PTR(autoware_perception_msgs::msg::TrackedObjects) msg,
+  const rclcpp::Time & current_time, MultiObjectTrackerInternalState & state,
+  TrackerDebugger & debugger);
+
 void process_objects_(
   const types::ObjectsWithAssociation & objects_with_associations,
   const rclcpp::Time & current_time, MultiObjectTrackerInternalState & state,
