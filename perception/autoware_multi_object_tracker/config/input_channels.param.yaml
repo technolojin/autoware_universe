@@ -126,7 +126,7 @@
           short_name: "dbT"
       # RADAR
       radar:
-        input_type: "DetectedObjects"
+        input_type: "TrackedObjects"
         associator_type: bev
         flags:
           can_spawn_new_tracker: true
