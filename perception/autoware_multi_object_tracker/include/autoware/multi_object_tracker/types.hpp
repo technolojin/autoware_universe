@@ -43,6 +43,7 @@
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 namespace autoware::multi_object_tracker
@@ -375,6 +376,12 @@ struct AssociationResult
   std::vector<unique_identifier_msgs::msg::UUID> unassigned_measurements;
   std::unordered_set<unique_identifier_msgs::msg::UUID, UUIDHash, UUIDEqual>
     trackers_with_shape_change;
+
+  // Source bindings (tracker UUID + channel) whose UUID match failed the plausibility gate this
+  // batch. associate() is a pure read over the tracker snapshot, so it records the offending
+  // bindings here instead of mutating; the processor drains this and calls clearSourceBinding() so a
+  // teleporting / recycled upstream id stops re-claiming the tracker on the next batch.
+  std::vector<std::pair<unique_identifier_msgs::msg::UUID, uint>> bindings_to_clear;
 
   void add(
     const unique_identifier_msgs::msg::UUID & tracker_uuid,

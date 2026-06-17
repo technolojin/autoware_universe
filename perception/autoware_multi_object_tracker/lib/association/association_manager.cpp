@@ -128,6 +128,24 @@ types::AssociationResult AssociationManager::associateTrackedByUuid(
       if (it == uuid_to_tracker.end()) continue;
       const Tracker * tracker = it->second;
       if (matched_trackers.count(tracker)) continue;
+
+      // A UUID match is strong identity evidence but not proof: reject pairings that are physically
+      // implausible (upstream id reuse, a source track that teleports). Simple gate — the distance
+      // between the tracker (predicted to the measurement time) and the measurement may not exceed
+      // twice the tracker's length. Failed pairs are left unmatched so the residual fallback re-pairs
+      // them geometrically (or spawns a tracker), and the offending binding is queued for clearing so
+      // it stops re-claiming this tracker next batch.
+      constexpr double UUID_MATCH_MULTIPLIER = 2.0;
+      types::DynamicObject predicted;
+      tracker->getTrackedObject(measurement_time, predicted);
+      const double dx = measurement.pose.position.x - predicted.pose.position.x;
+      const double dy = measurement.pose.position.y - predicted.pose.position.y;
+      const double max_dist = UUID_MATCH_MULTIPLIER * predicted.shape.dimensions.x;
+      if (dx * dx + dy * dy > max_dist * max_dist) {
+        result.bindings_to_clear.emplace_back(tracker->getUUID(), channel_index);
+        continue;
+      }
+
       result.add(tracker->getUUID(), measurement.uuid);
       matched_trackers.insert(tracker);
       measurement_matched[i] = true;

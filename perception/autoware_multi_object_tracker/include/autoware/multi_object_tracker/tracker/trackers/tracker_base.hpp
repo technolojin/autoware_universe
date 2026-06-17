@@ -192,6 +192,11 @@ public:
   // it only stops stale upstream ids — recycled or dropped — from matching in association.
   void pruneStaleSourceBindings(const rclcpp::Time & now);
 
+  // Drop this channel's binding (at most one per channel). Called when a UUID match was rejected by
+  // the plausibility gate so the offending upstream id stops re-claiming this tracker; the
+  // measurement is left for geometric association (which may re-pair it here or spawn a tracker).
+  void clearSourceBinding(uint channel);
+
   std::string getUuidString() const
   {
     const auto uuid_msg = uuid_;

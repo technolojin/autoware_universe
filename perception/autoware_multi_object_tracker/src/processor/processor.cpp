@@ -95,6 +95,18 @@ void TrackerProcessor::update(const types::AssociatedObjects & associated_object
   const auto & detected_objects = associated_objects.objects;
   const auto & association_result = associated_objects.association;
 
+  // Drop source bindings whose UUID match failed the plausibility gate during associate() (which is
+  // a pure read and cannot mutate trackers). Done before the update loop so a legitimate geometric
+  // re-match below can re-bind the same channel without being undone.
+  for (const auto & [tracker_uuid, channel] : association_result.bindings_to_clear) {
+    for (const auto & tracker : list_tracker_) {
+      if (types::UUIDEqual{}(tracker->getUUID(), tracker_uuid)) {
+        tracker->clearSourceBinding(channel);
+        break;
+      }
+    }
+  }
+
   int tracker_idx = 0;
   const auto & time = detected_objects.header.stamp;
   for (auto tracker_itr = list_tracker_.begin(); tracker_itr != list_tracker_.end();

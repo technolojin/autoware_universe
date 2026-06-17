@@ -80,6 +80,15 @@ void Tracker::pruneStaleSourceBindings(const rclcpp::Time & now)
     source_bindings_.end());
 }
 
+void Tracker::clearSourceBinding(const uint channel)
+{
+  source_bindings_.erase(
+    std::remove_if(
+      source_bindings_.begin(), source_bindings_.end(),
+      [channel](const types::SourceBinding & binding) { return binding.channel == channel; }),
+    source_bindings_.end());
+}
+
 void Tracker::initializeExistenceProbabilities(
   const uint & channel_index, const float & existence_probability)
 {
