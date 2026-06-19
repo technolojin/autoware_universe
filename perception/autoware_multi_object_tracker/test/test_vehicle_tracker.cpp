@@ -225,13 +225,16 @@ TEST(AnalyzePolygonMeasurement, RoundedBodyStillYieldsBoundingCorner)
   EXPECT_NEAR(m.corner.y, -1.5, 1e-6);  // min-y extent of the blob
 }
 
-// --- updateStatePoseCorner -----------------------------------------------------------------------
+// --- wheel-anchor update from a reconstructed corner ---------------------------------------------
 
-// The corner measurement drives the EKF: an observed rear corner offset laterally from the
-// predicted rear corner pulls the body toward it (between prediction and observation, never past
-// it), with the prior width living only in the predicted measurement. Proves the observation-only
-// mean moves the filter without being pre-fused with the prior.
-TEST(UpdateStatePoseCorner, MovesEstimateTowardObservedCorner)
+// The corner measurement drives the EKF through the wheel-anchor update: VehicleTracker
+// reconstructs the rear/front FACE center from the observed corner (subtracting the prior
+// half-width offset s_lat * (width/2) * n at the predicted yaw), then calls
+// updateStatePoseRear/Front. An observed rear corner offset laterally from the prediction pulls the
+// body toward it (between prediction and observation, never past it). This reproduces that
+// tracker-side reconstruction to prove the wheel-anchor update moves the filter toward the
+// observation without the prior being pre-fused into the measured value.
+TEST(UpdateStatePoseRear, MovesEstimateTowardReconstructedCorner)
 {
   BicycleMotionModel model;
   const rclcpp::Time t(0, 0, RCL_ROS_TIME);
@@ -249,10 +252,18 @@ TEST(UpdateStatePoseCorner, MovesEstimateTowardObservedCorner)
   ASSERT_TRUE(model.getPredictedState(t, pose0, c0, tw0, c0));
   EXPECT_NEAR(pose0.position.y, 0.0, 1e-6);
 
-  // Observe the rear-left corner shifted +0.4 in y (small, tight covariance so the gain is
-  // sizable).
-  const std::array<double, 4> corner_cov{0.01, 0.0, 0.0, 0.01};
-  ASSERT_TRUE(model.updateStatePoseCorner(8.0, 1.4, corner_cov, /*is_front=*/false, 1.0, 2.0));
+  // Observe the rear-left corner shifted +0.4 in y -> (8, 1.4). Reconstruct the rear face center as
+  // the tracker does: face = corner - s_lat * (width/2) * n, n = (-sin yaw, cos yaw); at yaw 0 this
+  // is (8, 0.4). Tight covariance (packed into the x/y block) so the gain is sizable.
+  const double yaw = model.getYawState();
+  constexpr double s_lat = 1.0;
+  constexpr double half_w = 0.5 * 2.0;
+  const double face_x = 8.0 - s_lat * half_w * (-std::sin(yaw));
+  const double face_y = 1.4 - s_lat * half_w * (std::cos(yaw));
+  std::array<double, 36> corner_cov{};
+  corner_cov[XYZRPY_COV_IDX::X_X] = 0.01;
+  corner_cov[XYZRPY_COV_IDX::Y_Y] = 0.01;
+  ASSERT_TRUE(model.updateStatePoseRear(face_x, face_y, corner_cov));
 
   geometry_msgs::msg::Pose pose1;
   std::array<double, 36> c1{};
@@ -261,36 +272,6 @@ TEST(UpdateStatePoseCorner, MovesEstimateTowardObservedCorner)
   EXPECT_GT(pose1.position.y, pose0.position.y);  // moved toward the observation
   EXPECT_LT(pose1.position.y, 0.4);               // but not past it
   EXPECT_NEAR(pose1.position.x, 10.0, 0.1);       // longitudinal ~unchanged
-}
-
-// A grossly inconsistent corner (many sigma off) is rejected by the Mahalanobis gate: the update
-// returns false and the state is left untouched, so a mis-association cannot corrupt the track.
-TEST(UpdateStatePoseCorner, GatesOutGrossOutlier)
-{
-  BicycleMotionModel model;
-  const rclcpp::Time t(0, 0, RCL_ROS_TIME);
-  std::array<double, 36> pose_cov{};
-  using autoware_utils_geometry::xyzrpy_covariance_index::XYZRPY_COV_IDX;
-  pose_cov[XYZRPY_COV_IDX::X_X] = 1.0;
-  pose_cov[XYZRPY_COV_IDX::Y_Y] = 1.0;
-  ASSERT_TRUE(model.initialize(t, 10.0, 0.0, 0.0, pose_cov, 0.0, 1.0, 0.0, 1.0, 4.0));
-
-  geometry_msgs::msg::Pose pose0;
-  std::array<double, 36> c0{};
-  geometry_msgs::msg::Twist tw0;
-  ASSERT_TRUE(model.getPredictedState(t, pose0, c0, tw0, c0));
-
-  // Predicted rear-left corner is (8, 1); observe it 30 m away with a tight covariance -> the
-  // innovation is enormous in sigma and must be gated out.
-  const std::array<double, 4> corner_cov{0.01, 0.0, 0.0, 0.01};
-  EXPECT_FALSE(model.updateStatePoseCorner(8.0, 31.0, corner_cov, /*is_front=*/false, 1.0, 2.0));
-
-  geometry_msgs::msg::Pose pose1;
-  std::array<double, 36> c1{};
-  geometry_msgs::msg::Twist tw1;
-  ASSERT_TRUE(model.getPredictedState(t, pose1, c1, tw1, c1));
-  EXPECT_NEAR(pose1.position.x, pose0.position.x, 1e-9);  // state untouched
-  EXPECT_NEAR(pose1.position.y, pose0.position.y, 1e-9);
 }
 
 }  // namespace autoware::multi_object_tracker

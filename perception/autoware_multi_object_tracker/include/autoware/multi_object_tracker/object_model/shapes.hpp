@@ -82,9 +82,9 @@ struct PolygonMeasurement
   std::array<double, 4> corner_cov{};
 
   // Which predicted box corner the measurement is associated to, derived from the ego-facing side
-  // (a discrete prior-driven choice, not a mean injection). Consumed directly by
-  // BicycleMotionModel::updateStatePoseCorner — is_front selects the front/rear endpoint blend,
-  // s_lat (+1 / -1) the lateral half-width sign.
+  // (a discrete prior-driven choice, not a mean injection). Consumed by VehicleTracker to
+  // reconstruct the face-center measurement for the wheel-anchor EKF (updateStatePoseFront/Rear):
+  // is_front selects the front/rear endpoint blend, s_lat (+1 / -1) the lateral half-width sign.
   bool is_front = false;
   double s_lat = 1.0;
 
