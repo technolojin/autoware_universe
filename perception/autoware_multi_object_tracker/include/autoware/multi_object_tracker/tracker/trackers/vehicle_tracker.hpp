@@ -43,15 +43,20 @@ private:
   // Consumed by setObjectShape() so UnstableShapeFilter commits the new length correctly.
   BicycleMotionModel::LengthUpdateAnchor shape_update_anchor_;
 
+  // Latest ego position (map frame), pushed by the processor each frame via setEgoPose().
+  // Required to resolve which cluster surfaces are visible in conditionedUpdate().
+  std::optional<geometry_msgs::msg::Point> ego_pos_;
+
   // EKF kinematic update — selects update variant based on data availability.
   bool updateKinematics(
     const types::DynamicObject & object, const types::InputChannel & channel_info);
   // Wheel-anchor EKF update (front or rear) plus z/height updates.
-  // Also records the anchor in shape_update_anchor_. `prediction` supplies the tracked body center
+  // Also records the anchor in shape_update_anchor_. `observed_width` is the cluster's visible
+  // lateral extent (from analyzePolygonGeometry); `prediction` supplies the tracked body center
   // used by the lateral (over-/under-wide polygon) anchor correction.
   bool updateWheelKinematics(
     const UpdateStrategy & strategy, const types::DynamicObject & measurement,
-    const types::DynamicObject & prediction);
+    double observed_width, const types::DynamicObject & prediction);
 
 public:
   VehicleTracker(
@@ -84,6 +89,13 @@ public:
   // Overridden because the committed shape also drives the motion-model length (and anchor).
   // mergeFootprintFrom() is handled by the base via getShapeModel().mergeFrom().
   void setObjectShape(const autoware_perception_msgs::msg::Shape & shape) override;
+
+  // Cache the ego position for corner-based geometry, then forward to the shape model.
+  void setEgoPose(const std::optional<geometry_msgs::msg::Point> & ego_pos) override
+  {
+    ego_pos_ = ego_pos;
+    Tracker::setEgoPose(ego_pos);
+  }
 
   // Clusters (trust_extension=false) have unreliable bbox orientation — always use conditioned.
   UpdatePath selectUpdatePath(

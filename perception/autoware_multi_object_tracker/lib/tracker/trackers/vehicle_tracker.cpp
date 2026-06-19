@@ -204,7 +204,7 @@ bool VehicleTracker::updateKinematics(
 }
 
 bool VehicleTracker::updateWheelKinematics(
-  const UpdateStrategy & strategy, const types::DynamicObject & measurement,
+  const UpdateStrategy & strategy, const types::DynamicObject & measurement, double observed_width,
   const types::DynamicObject & prediction)
 {
   std::array<double, 36> pose_cov = measurement.pose_covariance;
@@ -222,8 +222,8 @@ bool VehicleTracker::updateWheelKinematics(
       0.3;  // residual std fraction once the corner is matched
     const double yaw = motion_model_.getYawState();
     const auto corr = correctWheelAnchorLateral(
-      yaw, shape_model_.getWidth(), prediction.pose.position, measurement.shape.dimensions.y,
-      strategy.anchor_point, balance_alpha, corner_residual_beta);
+      yaw, shape_model_.getWidth(), prediction.pose.position, observed_width, strategy.anchor_point,
+      balance_alpha, corner_residual_beta);
     anchor_point = corr.anchor;
 
     const double var_lat = corr.var_lat;
@@ -329,10 +329,18 @@ bool VehicleTracker::conditionedUpdate(
   const autoware_perception_msgs::msg::Shape & tracker_shape, const rclcpp::Time & measurement_time,
   const types::InputChannel & channel_info)
 {
-  const auto aligned = shapes::alignClusterToOrientation(measurement, motion_model_.getYawState());
-  const types::DynamicObject & meas = aligned ? *aligned : measurement;
-
-  UpdateStrategy strategy = determineUpdateStrategy(meas, prediction);
+  // Analyze the raw cluster polygon into corner / orientation cues, decoupled from the filter.
+  // Requires the ego position to resolve which surfaces are visible; without it (or without a
+  // reliable two-face corner) we fall back to the weak blended update.
+  shapes::PolygonGeometry geom;
+  UpdateStrategy strategy;
+  strategy.type = UpdateStrategyType::WEAK_UPDATE;
+  if (
+    ego_pos_ && measurement.shape.type == autoware_perception_msgs::msg::Shape::POLYGON &&
+    !measurement.shape.footprint.points.empty()) {
+    geom = shapes::analyzePolygonGeometry(measurement, *ego_pos_, prediction);
+    strategy = determineUpdateStrategy(geom, prediction, shape_model_.getWidth());
+  }
 
   if (strategy.type == UpdateStrategyType::WEAK_UPDATE) {
     types::DynamicObject pseudo_measurement = prediction;
@@ -359,9 +367,11 @@ bool VehicleTracker::conditionedUpdate(
     return true;
   }
 
-  // Use the aligned measurement so the polygon width/anchor are expressed in the tracker frame
-  // (raw cluster dimensions.y is in the cluster's own local frame).
-  const bool is_updated = updateWheelKinematics(strategy, meas, prediction);
+  // Corner-based wheel update. The anchor is the observed end-face center reconstructed from the
+  // near corner and tracked width; yaw is carried implicitly by the wheel lever (held when the
+  // long-edge tangent is untrustworthy, see determineUpdateStrategy).
+  const bool is_updated =
+    updateWheelKinematics(strategy, measurement, geom.observed_width, prediction);
 
   geometry_msgs::msg::Pose tracker_pose;
   std::array<double, 36> dummy_cov{};

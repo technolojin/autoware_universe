@@ -19,6 +19,7 @@
 
 #include <geometry_msgs/msg/point.hpp>
 
+#include <limits>
 #include <optional>
 #include <utility>
 
@@ -47,6 +48,56 @@ bool convertConvexHullToBoundingBox(
 
 std::optional<types::DynamicObject> alignClusterToOrientation(
   const types::DynamicObject & cluster, double target_yaw);
+
+// Classification of why an observed polygon is larger / differently shaped than the track.
+enum class PolygonInflation {
+  NONE,                   // observed extent consistent with the tracked shape
+  NOISE,                  // a thin spike vertex (e.g. rain return) inflates the hull
+  FAULTY,                 // bimodal / over-wide hull (merge or over-segmentation)
+  SHAPE_CHANGE_CANDIDATE  // localized persistent extent growth (e.g. door opening); needs
+                          // temporal confirmation before being trusted
+};
+
+// Geometry extracted from a single vehicle cluster polygon, decoupled from any filter state.
+// A LiDAR vehicle cluster observes at most an L-shape: one long side + one end face meeting at the
+// near corner; the far hull boundary is silhouette closure across the occluded region, not real
+// surface. Only ego-facing edges are treated as real measurements. Confidences are continuous so
+// the caller can scale measurement variance (and hold yaw when a cue is unreliable) rather than
+// hard-accept / hard-reject.
+struct PolygonGeometry
+{
+  // Near corner — the ego-facing junction of the two visible faces (the L corner), map frame.
+  geometry_msgs::msg::Point near_corner;
+  bool has_corner = false;  // true only when a genuine two-face corner was found
+
+  // Orientation cue from the longer visible edge tangent (map-frame yaw, direction only — never
+  // used as a length). yaw_variance is continuous: large for short / rounded / poorly supported
+  // edges so the caller naturally holds yaw. yaw_cue_valid is the floor flag (length & straightness
+  // & roughly parallel to the predicted body axis).
+  double long_edge_dir = 0.0;
+  double long_edge_len = 0.0;
+  double yaw_variance = std::numeric_limits<double>::max();
+  bool yaw_cue_valid = false;
+
+  // Lateral extent of the visible side, perpendicular to long_edge_dir [m]; confidence in [0,1].
+  // Intentionally decoupled from vehicle length.
+  double observed_width = 0.0;
+  double observed_width_confidence = 0.0;
+
+  double roundness = 1.0;  // [0,1]; 1 = no straight edge resolvable
+  PolygonInflation inflation = PolygonInflation::NONE;
+  double trust = 0.0;  // overall [0,1] for the caller's path choice
+};
+
+// Analyze a vehicle cluster polygon into orientation / anchor cues with confidences.
+// `cluster` is a POLYGON DynamicObject (footprint in cluster-local frame, pose in map frame);
+// `ego_pos` is the sensor/ego position in map frame (required to resolve which surfaces are
+// visible); `prediction` is the tracked object (map pose + bbox dims) used as the reference for
+// 180-deg / front-rear disambiguation and width comparison. Returns a PolygonGeometry with
+// has_corner=false / trust=0 when no reliable two-face corner can be extracted.
+PolygonGeometry analyzePolygonGeometry(
+  const types::DynamicObject & cluster, const geometry_msgs::msg::Point & ego_pos,
+  const types::DynamicObject & prediction);
 
 std::pair<double, double> getObjectZRange(const types::DynamicObject & object);
 

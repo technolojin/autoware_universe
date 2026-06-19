@@ -78,6 +78,13 @@ public:
   void setOrientationAvailability(
     const types::OrientationAvailability & orientation_availability) override;
 
+  // Forward ego pose to BOTH inner trackers (conditionedUpdate runs on both).
+  void setEgoPose(const std::optional<geometry_msgs::msg::Point> & ego_pos) override
+  {
+    normal_vehicle_tracker_.setEgoPose(ego_pos);
+    big_vehicle_tracker_.setEgoPose(ego_pos);
+  }
+
   // Returns the active inner tracker's shape model, selected by the current highest-prob label
   // (same policy as getTrackedObject). setObjectShape()/mergeFootprintFrom() are overridden
   // separately to forward to BOTH inner trackers.

@@ -15,6 +15,7 @@
 #ifndef AUTOWARE__MULTI_OBJECT_TRACKER__TRACKER__UPDATE__VEHICLE_UPDATE_STRATEGY_HPP_
 #define AUTOWARE__MULTI_OBJECT_TRACKER__TRACKER__UPDATE__VEHICLE_UPDATE_STRATEGY_HPP_
 
+#include "autoware/multi_object_tracker/object_model/shapes.hpp"
 #include "autoware/multi_object_tracker/types.hpp"
 
 namespace autoware::multi_object_tracker
@@ -28,10 +29,16 @@ struct UpdateStrategy
   geometry_msgs::msg::Point anchor_point;  // used for FRONT_WHEEL_UPDATE and REAR_WHEEL_UPDATE
 };
 
-// Determines whether to use front-wheel, rear-wheel, or weak update
-// by finding the closest edge pair between measurement and prediction.
+// Determines whether to apply a front-wheel, rear-wheel, or weak update from the analyzed cluster
+// geometry. When a reliable two-face corner is present, the observed front/rear face CENTER is
+// reconstructed from the near corner and the tracked width (NOT from the inflated polygon extent),
+// the orientation following the observed long edge when its tangent is trustworthy and otherwise
+// the predicted body axis (yaw held). A weak update is requested when no reliable corner exists,
+// trust is too low, or the reconstructed face is grossly inconsistent with the prediction.
+// `tracked_width` is the tracker's current width estimate (shape model width).
 UpdateStrategy determineUpdateStrategy(
-  const types::DynamicObject & measurement, const types::DynamicObject & prediction);
+  const shapes::PolygonGeometry & geometry, const types::DynamicObject & prediction,
+  double tracked_width);
 
 // Blends measurement position/orientation into pred using a distance-weighted scheme.
 // When enlarge_covariance=true, inflates pose/velocity covariances for the weak-update path.

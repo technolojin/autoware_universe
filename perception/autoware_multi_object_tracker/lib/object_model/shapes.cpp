@@ -26,6 +26,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <limits>
 #include <string>
 #include <utility>
@@ -350,6 +351,260 @@ std::optional<types::DynamicObject> alignClusterToOrientation(
   aligned.shape.dimensions.y = ext.max_lat - ext.min_lat;
 
   return aligned;
+}
+
+namespace
+{
+// --- helpers for analyzePolygonGeometry -------------------------------------------------------
+
+struct Vec2
+{
+  double x{0.0};
+  double y{0.0};
+};
+
+inline double normAngle(double a)
+{
+  return std::atan2(std::sin(a), std::cos(a));
+}
+
+// Footprint points (cluster-local) -> map frame, using the cluster pose.
+std::vector<Vec2> footprintToMap(const types::DynamicObject & cluster)
+{
+  const double yaw = tf2::getYaw(cluster.pose.orientation);
+  const double c = std::cos(yaw), s = std::sin(yaw);
+  const double tx = cluster.pose.position.x, ty = cluster.pose.position.y;
+  std::vector<Vec2> out;
+  out.reserve(cluster.shape.footprint.points.size());
+  for (const auto & p : cluster.shape.footprint.points) {
+    out.push_back({tx + c * p.x - s * p.y, ty + s * p.x + c * p.y});
+  }
+  return out;
+}
+
+double signedArea(const std::vector<Vec2> & p)
+{
+  double a = 0.0;
+  const size_t n = p.size();
+  for (size_t i = 0; i < n; ++i) {
+    const auto & q0 = p[i];
+    const auto & q1 = p[(i + 1) % n];
+    a += q0.x * q1.y - q1.x * q0.y;
+  }
+  return 0.5 * a;
+}
+
+// Total-least-squares line fit over a vertex subset: principal direction, perpendicular RMS
+// residual, and the extent (length) projected along that direction.
+struct LineFit
+{
+  double dir = 0.0;       // [rad]
+  double residual = 0.0;  // perpendicular RMS [m]
+  double length = 0.0;    // extent along dir [m]
+  bool valid = false;
+};
+
+LineFit fitLine(const std::vector<Vec2> & pts)
+{
+  LineFit f;
+  const size_t n = pts.size();
+  if (n < 2) return f;
+  double cx = 0.0, cy = 0.0;
+  for (const auto & p : pts) {
+    cx += p.x;
+    cy += p.y;
+  }
+  cx /= static_cast<double>(n);
+  cy /= static_cast<double>(n);
+  double sxx = 0.0, syy = 0.0, sxy = 0.0;
+  for (const auto & p : pts) {
+    const double dx = p.x - cx, dy = p.y - cy;
+    sxx += dx * dx;
+    syy += dy * dy;
+    sxy += dx * dy;
+  }
+  f.dir = 0.5 * std::atan2(2.0 * sxy, sxx - syy);
+  const double cd = std::cos(f.dir), sd = std::sin(f.dir);
+  double min_along = std::numeric_limits<double>::max(),
+         max_along = std::numeric_limits<double>::lowest();
+  double sq_perp = 0.0;
+  for (const auto & p : pts) {
+    const double dx = p.x - cx, dy = p.y - cy;
+    const double along = dx * cd + dy * sd;
+    const double perp = -dx * sd + dy * cd;
+    min_along = std::min(min_along, along);
+    max_along = std::max(max_along, along);
+    sq_perp += perp * perp;
+  }
+  f.length = max_along - min_along;
+  f.residual = std::sqrt(sq_perp / static_cast<double>(n));
+  f.valid = true;
+  return f;
+}
+}  // namespace
+
+PolygonGeometry analyzePolygonGeometry(
+  const types::DynamicObject & cluster, const geometry_msgs::msg::Point & ego_pos,
+  const types::DynamicObject & prediction)
+{
+  // Tunables (documented inline; kept local — this is a self-contained geometry analyzer).
+  constexpr double MIN_ARM_LEN = 0.5;                // [m] min length of each visible face arm
+  constexpr double TURN_MIN = 35.0 * M_PI / 180.0;   // corner must bend at least this much
+  constexpr double TURN_MAX = 150.0 * M_PI / 180.0;  // ...and not fully reverse (spike guard)
+  constexpr double LONG_EDGE_MIN = 1.0;  // [m] min long-edge length to trust its tangent
+  constexpr double STRAIGHT_MIN = 0.5;   // straightness floor for yaw_cue_valid
+  constexpr double ANGLE_MAX_TO_PRED = 45.0 * M_PI / 180.0;  // long edge ~parallel to body axis
+  constexpr double R_REF = 0.15;                             // [m] residual scale for straightness
+  constexpr double BASE_YAW_VAR = (5.0 * M_PI / 180.0) * (5.0 * M_PI / 180.0);  // [rad^2]
+  constexpr double REF_LEN = 3.0;              // [m] reference long-edge length
+  constexpr double S_FLOOR = 0.1;              // straightness floor inside variance scaling
+  constexpr double AREA_RATIO_INFLATE = 1.5;   // area mismatch beyond this flags inflation
+  constexpr double WIDTH_INFLATE_RATIO = 1.5;  // observed width beyond this * tracked -> FAULTY
+  constexpr double SPIKE_TURN = 150.0 * M_PI / 180.0;  // thin-spike vertex turn (noise)
+
+  PolygonGeometry g;
+
+  const auto & raw = cluster.shape.footprint.points;
+  if (cluster.shape.type != autoware_perception_msgs::msg::Shape::POLYGON || raw.size() < 3) {
+    return g;  // not a usable polygon -> trust 0
+  }
+
+  std::vector<Vec2> pts = footprintToMap(cluster);
+  const size_t n = pts.size();
+  if (signedArea(pts) < 0.0) std::reverse(pts.begin(), pts.end());  // enforce CCW
+
+  const double pred_yaw = tf2::getYaw(prediction.pose.orientation);
+  const double pred_width = std::max(0.1, prediction.shape.dimensions.y);
+
+  // Ego-facing edge mask. For a CCW polygon the outward normal of edge (e_x,e_y) is (e_y,-e_x);
+  // the edge faces ego when that normal points toward ego from the edge midpoint.
+  std::vector<bool> facing(n, false);
+  for (size_t i = 0; i < n; ++i) {
+    const auto & p0 = pts[i];
+    const auto & p1 = pts[(i + 1) % n];
+    const double ex = p1.x - p0.x, ey = p1.y - p0.y;
+    const double mx = 0.5 * (p0.x + p1.x), my = 0.5 * (p0.y + p1.y);
+    const double to_ego_x = ego_pos.x - mx, to_ego_y = ego_pos.y - my;
+    facing[i] = (ey * to_ego_x - ex * to_ego_y) > 0.0;
+  }
+
+  // Find the corner: an ego-facing vertex whose two incident edges both face ego and bend by a
+  // near-right angle. Among candidates, pick the one closest to ego (the most reliable corner).
+  auto edgeDir = [&](size_t i) {
+    const auto & a = pts[i];
+    const auto & b = pts[(i + 1) % n];
+    return std::atan2(b.y - a.y, b.x - a.x);
+  };
+  int64_t best_corner = -1;
+  double best_corner_range = std::numeric_limits<double>::max();
+  double max_vertex_turn = 0.0;  // for spike (noise) detection, over all vertices
+  for (size_t j = 0; j < n; ++j) {
+    const size_t e_in = (j + n - 1) % n;  // edge (j-1, j)
+    const size_t e_out = j;               // edge (j, j+1)
+    const double turn = std::abs(normAngle(edgeDir(e_out) - edgeDir(e_in)));
+    max_vertex_turn = std::max(max_vertex_turn, turn);
+    if (!facing[e_in] || !facing[e_out]) continue;
+    if (turn < TURN_MIN || turn > TURN_MAX) continue;
+    const double dx = pts[j].x - ego_pos.x, dy = pts[j].y - ego_pos.y;
+    const double range = std::hypot(dx, dy);
+    if (range < best_corner_range) {
+      best_corner_range = range;
+      best_corner = static_cast<int64_t>(j);
+    }
+  }
+
+  // Inflation classification (independent of corner validity).
+  auto polygonArea = [&]() { return std::abs(signedArea(pts)); };
+  const double area_meas = cluster.area > 0.0 ? cluster.area : polygonArea();
+  const double area_pred =
+    prediction.area > 0.0
+      ? prediction.area
+      : std::max(0.0, prediction.shape.dimensions.x * prediction.shape.dimensions.y);
+
+  if (best_corner < 0) {
+    return g;  // no genuine two-face corner -> caller falls back to the weak path
+  }
+
+  const size_t jc = static_cast<size_t>(best_corner);
+  g.near_corner.x = pts[jc].x;
+  g.near_corner.y = pts[jc].y;
+  g.near_corner.z = cluster.pose.position.z;
+  g.has_corner = true;
+
+  // Grow the two arms along the contiguous ego-facing run, split at the corner.
+  std::vector<Vec2> arm_a{pts[jc]};  // backward (along edges j-1, j-2, ...)
+  for (size_t step = 0, i = (jc + n - 1) % n; step < n - 1 && facing[i];
+       ++step, i = (i + n - 1) % n) {
+    arm_a.push_back(pts[i]);
+  }
+  std::vector<Vec2> arm_b{pts[jc]};  // forward (along edges j, j+1, ...)
+  for (size_t step = 0, i = jc; step < n - 1 && facing[i]; ++step, i = (i + 1) % n) {
+    arm_b.push_back(pts[(i + 1) % n]);
+  }
+
+  const LineFit fa = fitLine(arm_a);
+  const LineFit fb = fitLine(arm_b);
+  if (!fa.valid || !fb.valid || fa.length < MIN_ARM_LEN || fb.length < MIN_ARM_LEN) {
+    // Only one real face -> longitudinal anchor is ambiguous; leave has_corner but low trust.
+    g.trust = 0.0;
+    return g;
+  }
+
+  const LineFit & longf = (fa.length >= fb.length) ? fa : fb;
+  const LineFit & shortf = (fa.length >= fb.length) ? fb : fa;
+
+  // Orientation cue from the long edge tangent, resolved against the predicted body axis.
+  double long_dir = longf.dir;
+  if (std::abs(normAngle(long_dir - pred_yaw)) > M_PI_2) long_dir = normAngle(long_dir + M_PI);
+  const double straightness = std::exp(-(longf.residual / R_REF) * (longf.residual / R_REF));
+  g.long_edge_dir = long_dir;
+  g.long_edge_len = longf.length;
+  g.roundness = std::clamp(1.0 - straightness, 0.0, 1.0);
+  g.yaw_variance = BASE_YAW_VAR * (REF_LEN / std::max(longf.length, 1e-3)) *
+                   (REF_LEN / std::max(longf.length, 1e-3)) / std::max(straightness, S_FLOOR);
+  g.yaw_cue_valid = longf.length >= LONG_EDGE_MIN && straightness >= STRAIGHT_MIN &&
+                    std::abs(normAngle(long_dir - pred_yaw)) <= ANGLE_MAX_TO_PRED;
+
+  // Observed width: lateral extent of the whole visible hull, perpendicular to the long edge.
+  const auto ext = computeOrientedExtent(pts, std::cos(long_dir), std::sin(long_dir));
+  g.observed_width = ext.max_lat - ext.min_lat;
+  g.observed_width_confidence =
+    std::clamp(std::min(g.observed_width, pred_width) / pred_width, 0.0, 1.0) *
+    std::clamp(shortf.length / pred_width, 0.0, 1.0);
+
+  // Inflation classification.
+  const double area_ratio = (area_meas > 0.0 && area_pred > 0.0)
+                              ? std::max(area_meas, area_pred) / std::min(area_meas, area_pred)
+                              : 1.0;
+  if (area_ratio <= AREA_RATIO_INFLATE) {
+    g.inflation = PolygonInflation::NONE;
+  } else if (g.observed_width > pred_width * WIDTH_INFLATE_RATIO) {
+    g.inflation = PolygonInflation::FAULTY;
+  } else if (max_vertex_turn > SPIKE_TURN) {
+    g.inflation = PolygonInflation::NOISE;
+  } else {
+    g.inflation = PolygonInflation::SHAPE_CHANGE_CANDIDATE;
+  }
+
+  // Overall trust: corner validity, modest straightness weighting, inflation penalty.
+  double inflation_penalty = 1.0;
+  switch (g.inflation) {
+    case PolygonInflation::FAULTY:
+      inflation_penalty = 0.5;
+      break;
+    case PolygonInflation::NOISE:
+      inflation_penalty = 0.6;
+      break;
+    case PolygonInflation::SHAPE_CHANGE_CANDIDATE:
+      inflation_penalty = 0.8;
+      break;
+    case PolygonInflation::NONE:
+      inflation_penalty = 1.0;
+      break;
+  }
+  g.trust = std::clamp((0.5 + 0.5 * straightness) * inflation_penalty, 0.0, 1.0);
+
+  return g;
 }
 
 std::pair<double, double> getObjectZRange(const types::DynamicObject & object)

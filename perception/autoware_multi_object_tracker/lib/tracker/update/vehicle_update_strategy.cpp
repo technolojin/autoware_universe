@@ -32,124 +32,58 @@ namespace
 
 constexpr double ALIGNMENT_RATIO_THRESHOLD = 0.2;     // 20% of the larger object's length
 constexpr double ALIGNMENT_ABSOLUTE_THRESHOLD = 1.0;  // [m] minimum tolerance for small objects
-
-struct EdgePositions
-{
-  double front_x, front_y;
-  double rear_x, rear_y;
-};
-
-enum class Edge { FRONT, REAR };
-
-struct EdgeAlignment
-{
-  double min_alignment_distance;
-  Edge aligned_pred_edge;
-  Edge aligned_meas_edge;
-};
-
-EdgePositions calculateEdgeCenters(const types::DynamicObject & obj)
-{
-  const double yaw = tf2::getYaw(obj.pose.orientation);
-  const double cos_yaw = std::cos(yaw);
-  const double sin_yaw = std::sin(yaw);
-  const double half_length = obj.shape.dimensions.x * 0.5;
-
-  return {
-    obj.pose.position.x + half_length * cos_yaw,  // front_x
-    obj.pose.position.y + half_length * sin_yaw,  // front_y
-    obj.pose.position.x - half_length * cos_yaw,  // rear_x
-    obj.pose.position.y - half_length * sin_yaw   // rear_y
-  };
-}
-
-EdgeAlignment findAlignedEdges(
-  const EdgePositions & meas_edges, const types::DynamicObject & prediction)
-{
-  const double pred_yaw = tf2::getYaw(prediction.pose.orientation);
-  const double pred_cos_yaw = std::cos(pred_yaw);
-  const double pred_sin_yaw = std::sin(pred_yaw);
-
-  const auto project_to_axis = [pred_cos_yaw, pred_sin_yaw](double x, double y) {
-    return x * pred_cos_yaw + y * pred_sin_yaw;
-  };
-
-  const double meas_front_axis = project_to_axis(meas_edges.front_x, meas_edges.front_y);
-  const double meas_rear_axis = project_to_axis(meas_edges.rear_x, meas_edges.rear_y);
-
-  const double pred_center_axis =
-    prediction.pose.position.x * pred_cos_yaw + prediction.pose.position.y * pred_sin_yaw;
-  const double predicted_half_length = prediction.shape.dimensions.x * 0.5;
-  const double pred_front_axis = pred_center_axis + predicted_half_length;
-  const double pred_rear_axis = pred_center_axis - predicted_half_length;
-
-  struct Candidate
-  {
-    double distance;
-    Edge pred_edge;
-    Edge meas_edge;
-  };
-  const std::array<Candidate, 4> candidates = {
-    {{std::abs(meas_front_axis - pred_front_axis), Edge::FRONT, Edge::FRONT},
-     {std::abs(meas_rear_axis - pred_front_axis), Edge::FRONT, Edge::REAR},
-     {std::abs(meas_front_axis - pred_rear_axis), Edge::REAR, Edge::FRONT},
-     {std::abs(meas_rear_axis - pred_rear_axis), Edge::REAR, Edge::REAR}}};
-
-  const auto best = std::min_element(
-    candidates.begin(), candidates.end(),
-    [](const Candidate & a, const Candidate & b) { return a.distance < b.distance; });
-
-  return {best->distance, best->pred_edge, best->meas_edge};
-}
-
-geometry_msgs::msg::Point calculateAnchorPoint(
-  const EdgeAlignment & alignment, const types::DynamicObject & measurement)
-{
-  geometry_msgs::msg::Point anchor_point;
-
-  const double meas_yaw = tf2::getYaw(measurement.pose.orientation);
-  const double meas_cos_yaw = std::cos(meas_yaw);
-  const double meas_sin_yaw = std::sin(meas_yaw);
-  const double meas_half_length = measurement.shape.dimensions.x * 0.5;
-
-  if (alignment.aligned_meas_edge == Edge::FRONT) {
-    anchor_point.x = measurement.pose.position.x + meas_half_length * meas_cos_yaw;
-    anchor_point.y = measurement.pose.position.y + meas_half_length * meas_sin_yaw;
-  } else {
-    anchor_point.x = measurement.pose.position.x - meas_half_length * meas_cos_yaw;
-    anchor_point.y = measurement.pose.position.y - meas_half_length * meas_sin_yaw;
-  }
-
-  return anchor_point;
-}
+constexpr double TRUST_MIN = 0.3;  // below this the corner geometry is too weak -> weak update
 
 }  // namespace
 
 UpdateStrategy determineUpdateStrategy(
-  const types::DynamicObject & measurement, const types::DynamicObject & prediction)
+  const shapes::PolygonGeometry & geometry, const types::DynamicObject & prediction,
+  double tracked_width)
 {
   UpdateStrategy strategy;
 
-  const EdgePositions meas_edges = calculateEdgeCenters(measurement);
-  const EdgeAlignment alignment = findAlignedEdges(meas_edges, prediction);
-
-  const double predicted_length = prediction.shape.dimensions.x;
-  const double measured_length = measurement.shape.dimensions.x;
-  const double max_length = std::max(predicted_length, measured_length);
-  const double alignment_threshold =
-    std::max(ALIGNMENT_RATIO_THRESHOLD * max_length, ALIGNMENT_ABSOLUTE_THRESHOLD);
-  const bool is_edge_aligned = alignment.min_alignment_distance < alignment_threshold;
-
-  if (!is_edge_aligned) {
+  if (!geometry.has_corner || geometry.trust < TRUST_MIN) {
     strategy.type = UpdateStrategyType::WEAK_UPDATE;
     return strategy;
   }
 
-  strategy.type = (alignment.aligned_pred_edge == Edge::FRONT)
-                    ? UpdateStrategyType::FRONT_WHEEL_UPDATE
-                    : UpdateStrategyType::REAR_WHEEL_UPDATE;
-  strategy.anchor_point = calculateAnchorPoint(alignment, measurement);
+  const double pred_yaw = tf2::getYaw(prediction.pose.orientation);
+  // Body axis used to place the anchor: the observed long edge when trustworthy (lets the EKF
+  // rotate toward it via the wheel lever), otherwise the predicted axis (yaw held).
+  const double theta = geometry.yaw_cue_valid ? geometry.long_edge_dir : pred_yaw;
+  const double nx = -std::sin(theta);  // body lateral unit vector
+  const double ny = std::cos(theta);
 
+  // Reconstruct the observed end-face CENTER from the near corner: step inward (toward the tracked
+  // center) by half the tracked width along the lateral axis. Width comes from the tracker, never
+  // from the (possibly inflated / partial) polygon extent.
+  const double to_cx = prediction.pose.position.x - geometry.near_corner.x;
+  const double to_cy = prediction.pose.position.y - geometry.near_corner.y;
+  const double sgn = (nx * to_cx + ny * to_cy) >= 0.0 ? 1.0 : -1.0;
+  geometry_msgs::msg::Point face;
+  face.x = geometry.near_corner.x + sgn * (tracked_width * 0.5) * nx;
+  face.y = geometry.near_corner.y + sgn * (tracked_width * 0.5) * ny;
+  face.z = geometry.near_corner.z;
+
+  // Front vs rear from the longitudinal projection onto the predicted body axis.
+  const double ux = std::cos(pred_yaw), uy = std::sin(pred_yaw);
+  const double face_proj = face.x * ux + face.y * uy;
+  const double center_proj = prediction.pose.position.x * ux + prediction.pose.position.y * uy;
+
+  // Gross-mismatch gate: the reconstructed face must sit near a predicted end face.
+  const double half_len = 0.5 * prediction.shape.dimensions.x;
+  const double dist_to_face = std::abs(std::abs(face_proj - center_proj) - half_len);
+  const double max_len = std::max(prediction.shape.dimensions.x, geometry.long_edge_len);
+  const double alignment_threshold =
+    std::max(ALIGNMENT_RATIO_THRESHOLD * max_len, ALIGNMENT_ABSOLUTE_THRESHOLD);
+  if (dist_to_face > alignment_threshold) {
+    strategy.type = UpdateStrategyType::WEAK_UPDATE;
+    return strategy;
+  }
+
+  strategy.type = (face_proj >= center_proj) ? UpdateStrategyType::FRONT_WHEEL_UPDATE
+                                             : UpdateStrategyType::REAR_WHEEL_UPDATE;
+  strategy.anchor_point = face;
   return strategy;
 }
 

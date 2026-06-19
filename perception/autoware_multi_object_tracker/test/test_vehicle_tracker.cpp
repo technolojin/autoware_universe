@@ -12,11 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include "autoware/multi_object_tracker/object_model/shapes.hpp"
 #include "autoware/multi_object_tracker/tracker/update/vehicle_update_strategy.hpp"
 
 #include <gtest/gtest.h>
 
 #include <cmath>
+#include <utility>
+#include <vector>
 
 namespace autoware::multi_object_tracker
 {
@@ -115,6 +118,142 @@ TEST(CorrectWheelAnchorLateral, SignSymmetry)
   const auto neg = run(2.0, 4.0, -1.5);
   EXPECT_DOUBLE_EQ(pos.anchor.y, -neg.anchor.y);
   EXPECT_DOUBLE_EQ(pos.var_lat, neg.var_lat);
+}
+
+// --- analyzePolygonGeometry --------------------------------------------------------------------
+
+namespace
+{
+geometry_msgs::msg::Pose makePose(double x, double y, double yaw)
+{
+  geometry_msgs::msg::Pose p;
+  p.position.x = x;
+  p.position.y = y;
+  p.position.z = 0.0;
+  p.orientation.x = 0.0;
+  p.orientation.y = 0.0;
+  p.orientation.z = std::sin(yaw / 2.0);
+  p.orientation.w = std::cos(yaw / 2.0);
+  return p;
+}
+
+types::DynamicObject makeBox(double cx, double cy, double yaw, double len, double wid)
+{
+  types::DynamicObject o;
+  o.pose = makePose(cx, cy, yaw);
+  o.shape.type = autoware_perception_msgs::msg::Shape::BOUNDING_BOX;
+  o.shape.dimensions.x = len;
+  o.shape.dimensions.y = wid;
+  o.shape.dimensions.z = 1.5;
+  o.area = len * wid;
+  return o;
+}
+
+// Build a POLYGON cluster with an identity pose, so footprint coords are already map-frame.
+types::DynamicObject makePolyCluster(const std::vector<std::pair<double, double>> & pts)
+{
+  types::DynamicObject o;
+  o.pose = makePose(0.0, 0.0, 0.0);
+  o.shape.type = autoware_perception_msgs::msg::Shape::POLYGON;
+  o.shape.dimensions.z = 1.5;
+  double a = 0.0;
+  const size_t n = pts.size();
+  for (size_t i = 0; i < n; ++i) {
+    geometry_msgs::msg::Point32 p;
+    p.x = static_cast<float>(pts[i].first);
+    p.y = static_cast<float>(pts[i].second);
+    p.z = 0.0f;
+    o.shape.footprint.points.push_back(p);
+    const auto & q0 = pts[i];
+    const auto & q1 = pts[(i + 1) % n];
+    a += q0.first * q1.second - q1.first * q0.second;
+  }
+  o.area = std::abs(0.5 * a);
+  return o;
+}
+
+geometry_msgs::msg::Point makeEgo(double x, double y)
+{
+  geometry_msgs::msg::Point e;
+  e.x = x;
+  e.y = y;
+  e.z = 0.0;
+  return e;
+}
+
+double wrapToPi(double a)
+{
+  return std::atan2(std::sin(a), std::cos(a));
+}
+}  // namespace
+
+// A clean L-shape viewed from a corner: recover the near corner, the long-edge yaw, the width, and
+// flag no inflation.
+TEST(AnalyzePolygonGeometry, LShapeRecoversCorner)
+{
+  const auto cluster = makePolyCluster({{8, -1}, {12, -1}, {12, 1}, {8, 1}});
+  const auto pred = makeBox(10.0, 0.0, 0.0, 4.0, 2.0);
+  const auto g = shapes::analyzePolygonGeometry(cluster, makeEgo(0.0, -10.0), pred);
+
+  EXPECT_TRUE(g.has_corner);
+  EXPECT_NEAR(g.near_corner.x, 8.0, 1e-6);
+  EXPECT_NEAR(g.near_corner.y, -1.0, 1e-6);
+  EXPECT_TRUE(g.yaw_cue_valid);
+  EXPECT_NEAR(wrapToPi(g.long_edge_dir), 0.0, 0.1);  // long side runs along x
+  EXPECT_NEAR(g.observed_width, 2.0, 1e-6);
+  EXPECT_EQ(g.inflation, shapes::PolygonInflation::NONE);
+  EXPECT_GT(g.trust, 0.5);
+}
+
+// The strategy reconstructs the observed REAR face center from the near corner + tracked width.
+TEST(AnalyzePolygonGeometry, StrategyReconstructsRearFaceCenter)
+{
+  const auto cluster = makePolyCluster({{8, -1}, {12, -1}, {12, 1}, {8, 1}});
+  const auto pred = makeBox(10.0, 0.0, 0.0, 4.0, 2.0);
+  const auto g = shapes::analyzePolygonGeometry(cluster, makeEgo(0.0, -10.0), pred);
+  const auto s = determineUpdateStrategy(g, pred, 2.0);
+
+  EXPECT_EQ(s.type, UpdateStrategyType::REAR_WHEEL_UPDATE);
+  EXPECT_NEAR(s.anchor_point.x, 8.0, 1e-6);  // rear face center of a [8,12]x[-1,1] box
+  EXPECT_NEAR(s.anchor_point.y, 0.0, 1e-6);
+}
+
+// Rounded body (12-gon, 30 deg turns): no sharp corner -> hold (no corner, zero trust).
+TEST(AnalyzePolygonGeometry, RoundedBodyHasNoCorner)
+{
+  std::vector<std::pair<double, double>> pts;
+  for (int i = 0; i < 12; ++i) {
+    const double th = 2.0 * M_PI * static_cast<double>(i) / 12.0;
+    pts.push_back({10.0 + 1.5 * std::cos(th), 1.5 * std::sin(th)});
+  }
+  const auto cluster = makePolyCluster(pts);
+  const auto pred = makeBox(10.0, 0.0, 0.0, 4.0, 2.0);
+  const auto g = shapes::analyzePolygonGeometry(cluster, makeEgo(0.0, -10.0), pred);
+
+  EXPECT_FALSE(g.has_corner);
+  EXPECT_DOUBLE_EQ(g.trust, 0.0);
+}
+
+// A non-polygon (bounding box, no footprint) yields no corner.
+TEST(AnalyzePolygonGeometry, NonPolygonHasNoCorner)
+{
+  const auto cluster = makeBox(10.0, 0.0, 0.0, 4.0, 2.0);
+  const auto pred = makeBox(10.0, 0.0, 0.0, 4.0, 2.0);
+  const auto g = shapes::analyzePolygonGeometry(cluster, makeEgo(0.0, -10.0), pred);
+
+  EXPECT_FALSE(g.has_corner);
+  EXPECT_DOUBLE_EQ(g.trust, 0.0);
+}
+
+// An over-wide hull (merge / over-segmentation): width far exceeds the track -> FAULTY inflation.
+TEST(AnalyzePolygonGeometry, WideMergeFlagsFaulty)
+{
+  const auto cluster = makePolyCluster({{8, -2}, {12, -2}, {12, 2}, {8, 2}});  // width 4, area 16
+  const auto pred = makeBox(10.0, 0.0, 0.0, 4.0, 2.0);                         // width 2, area 8
+  const auto g = shapes::analyzePolygonGeometry(cluster, makeEgo(0.0, -10.0), pred);
+
+  EXPECT_TRUE(g.has_corner);
+  EXPECT_EQ(g.inflation, shapes::PolygonInflation::FAULTY);
 }
 
 }  // namespace autoware::multi_object_tracker
