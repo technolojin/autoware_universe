@@ -461,6 +461,12 @@ PolygonGeometry analyzePolygonGeometry(
   constexpr double AREA_RATIO_INFLATE = 1.5;   // area mismatch beyond this flags inflation
   constexpr double WIDTH_INFLATE_RATIO = 1.5;  // observed width beyond this * tracked -> FAULTY
   constexpr double SPIKE_TURN = 150.0 * M_PI / 180.0;  // thin-spike vertex turn (noise)
+  // Single visible end-face fallback (thin rear/front cluster: one face, no L-corner).
+  constexpr double END_FACE_PERP_TOL = 40.0 * M_PI / 180.0;  // edge ~perpendicular to body axis
+  constexpr double END_FACE_MIN_LEN = 0.3;       // [m] min visible edge length to anchor
+  constexpr double END_FACE_WIDTH_MARGIN = 1.5;  // edge length must be <= margin * tracked width
+  constexpr double END_FACE_MAX_RESIDUAL = 0.3;  // [m] max RMS straightness residual of the edge
+  constexpr double END_FACE_TRUST = 0.4;         // conservative trust for the single-face anchor
 
   PolygonGeometry g;
 
@@ -487,6 +493,83 @@ PolygonGeometry analyzePolygonGeometry(
     const double to_ego_x = ego_pos.x - mx, to_ego_y = ego_pos.y - my;
     facing[i] = (ey * to_ego_x - ex * to_ego_y) > 0.0;
   }
+
+  // Single visible end-face fallback. When no two-face corner is usable (rounded body, or only one
+  // real face — a thin rear/front cluster), the longest contiguous ego-facing edge run IS the
+  // visible end face: its midpoint is the observed end-face center. Accept it only when that edge
+  // runs ~perpendicular to the predicted body axis (a genuine front/rear face, not a long side)
+  // and its length is plausible against the tracked width. Populates the end-face cue on success;
+  // leaves g untouched (trust 0) otherwise, so the caller falls back to the weak blended update.
+  const double z_cluster = cluster.pose.position.z;
+  auto attemptEndFace = [&]() {
+    // Longest contiguous (cyclic) run of ego-facing edges. A fully ego-facing hull is degenerate
+    // (faces indistinguishable) and is rejected.
+    bool all_facing = true;
+    for (size_t i = 0; i < n; ++i) {
+      if (!facing[i]) {
+        all_facing = false;
+        break;
+      }
+    }
+    if (all_facing) return;
+    size_t break_edge = 0;
+    while (break_edge < n && facing[break_edge]) ++break_edge;
+    size_t best_start = 0, best_run = 0, cur_start = 0, cur_run = 0;
+    for (size_t step = 0; step < n; ++step) {
+      const size_t e = (break_edge + 1 + step) % n;  // start scanning just after a non-facing edge
+      if (facing[e]) {
+        if (cur_run == 0) cur_start = e;
+        ++cur_run;
+        if (cur_run > best_run) {
+          best_run = cur_run;
+          best_start = cur_start;
+        }
+      } else {
+        cur_run = 0;
+      }
+    }
+    if (best_run < 1) return;
+
+    // Vertices spanned by the run (best_run edges -> best_run + 1 vertices).
+    std::vector<Vec2> run;
+    run.reserve(best_run + 1);
+    for (size_t t = 0; t <= best_run; ++t) run.push_back(pts[(best_start + t) % n]);
+
+    const LineFit lf = fitLine(run);
+    if (!lf.valid || lf.length < END_FACE_MIN_LEN || lf.residual > END_FACE_MAX_RESIDUAL) return;
+    // End-face gate: edge ~perpendicular to the predicted body axis.
+    const double off = std::abs(normAngle(lf.dir - pred_yaw));
+    if (std::abs(off - M_PI_2) > END_FACE_PERP_TOL) return;
+    // Width plausibility: the visible face cannot be much wider than the tracked width.
+    if (lf.length > pred_width * END_FACE_WIDTH_MARGIN) return;
+
+    // End-face center = projected midpoint of the run along the edge tangent.
+    double cx = 0.0, cy = 0.0;
+    for (const auto & v : run) {
+      cx += v.x;
+      cy += v.y;
+    }
+    cx /= static_cast<double>(run.size());
+    cy /= static_cast<double>(run.size());
+    const double cd = std::cos(lf.dir), sd = std::sin(lf.dir);
+    double min_a = std::numeric_limits<double>::max(), max_a = std::numeric_limits<double>::lowest();
+    for (const auto & v : run) {
+      const double a = (v.x - cx) * cd + (v.y - cy) * sd;
+      min_a = std::min(min_a, a);
+      max_a = std::max(max_a, a);
+    }
+    const double mid = 0.5 * (min_a + max_a);
+
+    g.has_corner = false;
+    g.has_end_face = true;
+    g.end_face_center.x = cx + mid * cd;
+    g.end_face_center.y = cy + mid * sd;
+    g.end_face_center.z = z_cluster;
+    g.long_edge_dir = lf.dir;  // edge tangent = body lateral axis in this mode
+    g.observed_width = lf.length;
+    g.yaw_cue_valid = false;
+    g.trust = END_FACE_TRUST;
+  };
 
   // Find the corner: an ego-facing vertex whose two incident edges both face ego and bend by a
   // near-right angle. Among candidates, pick the one closest to ego (the most reliable corner).
@@ -522,7 +605,8 @@ PolygonGeometry analyzePolygonGeometry(
       : std::max(0.0, prediction.shape.dimensions.x * prediction.shape.dimensions.y);
 
   if (best_corner < 0) {
-    return g;  // no genuine two-face corner -> caller falls back to the weak path
+    attemptEndFace();  // no two-face corner -> try the single end-face anchor before giving up
+    return g;
   }
 
   const size_t jc = static_cast<size_t>(best_corner);
@@ -545,8 +629,12 @@ PolygonGeometry analyzePolygonGeometry(
   const LineFit fa = fitLine(arm_a);
   const LineFit fb = fitLine(arm_b);
   if (!fa.valid || !fb.valid || fa.length < MIN_ARM_LEN || fb.length < MIN_ARM_LEN) {
-    // Only one real face -> longitudinal anchor is ambiguous; leave has_corner but low trust.
+    // Only one real face: the corner is not a genuine two-face junction. Drop it and reconstruct
+    // the visible end face directly, so a thin rear/front cluster anchors the box at that face
+    // instead of degrading to a centroid-as-center weak update.
+    g.has_corner = false;
     g.trust = 0.0;
+    attemptEndFace();
     return g;
   }
 

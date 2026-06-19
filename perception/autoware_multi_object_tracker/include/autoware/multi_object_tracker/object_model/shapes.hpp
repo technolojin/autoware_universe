@@ -70,6 +70,15 @@ struct PolygonGeometry
   geometry_msgs::msg::Point near_corner;
   bool has_corner = false;  // true only when a genuine two-face corner was found
 
+  // Single visible end face — set when only ONE face is observed (a thin rear/front cluster: no
+  // L-corner, so has_corner is false). The visible edge IS the end face, so its midpoint is the
+  // observed end-face center directly (no corner step). In this mode long_edge_dir is the edge
+  // tangent (the body LATERAL axis, not the longitudinal one) and observed_width is the edge
+  // length; yaw_cue_valid stays false (a lateral tangent is not a heading cue). Lets the caller
+  // anchor the box at the visible face instead of blending its centroid onto the box center.
+  bool has_end_face = false;
+  geometry_msgs::msg::Point end_face_center;  // map frame, midpoint of the visible end edge
+
   // Orientation cue from the longer visible edge tangent (map-frame yaw, direction only — never
   // used as a length). yaw_variance is continuous: large for short / rounded / poorly supported
   // edges so the caller naturally holds yaw. yaw_cue_valid is the floor flag (length & straightness
@@ -93,8 +102,10 @@ struct PolygonGeometry
 // `cluster` is a POLYGON DynamicObject (footprint in cluster-local frame, pose in map frame);
 // `ego_pos` is the sensor/ego position in map frame (required to resolve which surfaces are
 // visible); `prediction` is the tracked object (map pose + bbox dims) used as the reference for
-// 180-deg / front-rear disambiguation and width comparison. Returns a PolygonGeometry with
-// has_corner=false / trust=0 when no reliable two-face corner can be extracted.
+// 180-deg / front-rear disambiguation and width comparison. When no reliable two-face corner can
+// be extracted but a single ego-facing end face is visible (a thin rear/front cluster), the result
+// carries has_end_face=true with the observed end-face center. Returns has_corner=false /
+// has_end_face=false / trust=0 when neither cue can be extracted.
 PolygonGeometry analyzePolygonGeometry(
   const types::DynamicObject & cluster, const geometry_msgs::msg::Point & ego_pos,
   const types::DynamicObject & prediction);

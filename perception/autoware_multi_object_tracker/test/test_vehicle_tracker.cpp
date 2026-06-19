@@ -256,4 +256,50 @@ TEST(AnalyzePolygonGeometry, WideMergeFlagsFaulty)
   EXPECT_EQ(g.inflation, shapes::PolygonInflation::FAULTY);
 }
 
+// A thin rear cluster (only the rear face visible, no L-corner): the single visible end face is
+// recovered with its midpoint as the end-face center (NOT a two-face corner).
+TEST(AnalyzePolygonGeometry, ThinRearFaceRecoversEndFace)
+{
+  // Rear face at x=8 spanning y in [-1, 1], thin in x ([8, 8.2]); ego sits behind at x=0.
+  const auto cluster = makePolyCluster({{8, -1}, {8.2, -1}, {8.2, 1}, {8, 1}});
+  const auto pred = makeBox(10.0, 0.0, 0.0, 4.0, 2.0);
+  const auto g = shapes::analyzePolygonGeometry(cluster, makeEgo(0.0, 0.0), pred);
+
+  EXPECT_FALSE(g.has_corner);
+  EXPECT_TRUE(g.has_end_face);
+  EXPECT_NEAR(g.end_face_center.x, 8.0, 1e-6);  // rear face center
+  EXPECT_NEAR(g.end_face_center.y, 0.0, 1e-6);
+  EXPECT_NEAR(g.observed_width, 2.0, 1e-6);
+  EXPECT_GT(g.trust, 0.0);
+}
+
+// The strategy anchors the thin rear cluster at the REAR face (so the box extends forward), instead
+// of degrading to a centroid-as-center weak update.
+TEST(AnalyzePolygonGeometry, ThinRearFaceAnchorsAtRear)
+{
+  const auto cluster = makePolyCluster({{8, -1}, {8.2, -1}, {8.2, 1}, {8, 1}});
+  const auto pred = makeBox(10.0, 0.0, 0.0, 4.0, 2.0);
+  const auto g = shapes::analyzePolygonGeometry(cluster, makeEgo(0.0, 0.0), pred);
+  const auto s = determineUpdateStrategy(g, pred, 2.0);
+
+  EXPECT_EQ(s.type, UpdateStrategyType::REAR_WHEEL_UPDATE);
+  EXPECT_NEAR(s.anchor_point.x, 8.0, 1e-6);  // rear face center, not the box center
+  EXPECT_NEAR(s.anchor_point.y, 0.0, 1e-6);
+}
+
+// A thin SIDE strip (visible edge parallel to the body axis) must NOT be treated as an end face:
+// the longitudinal anchor is ambiguous, so it stays on the weak path.
+TEST(AnalyzePolygonGeometry, ThinSideFaceStaysWeak)
+{
+  // Side face at y=1.2 spanning x in [8, 12], thin in y ([1, 1.2]); ego sits above at y=10.
+  const auto cluster = makePolyCluster({{8, 1}, {12, 1}, {12, 1.2}, {8, 1.2}});
+  const auto pred = makeBox(10.0, 0.0, 0.0, 4.0, 2.0);
+  const auto g = shapes::analyzePolygonGeometry(cluster, makeEgo(10.0, 10.0), pred);
+  const auto s = determineUpdateStrategy(g, pred, 2.0);
+
+  EXPECT_FALSE(g.has_corner);
+  EXPECT_FALSE(g.has_end_face);
+  EXPECT_EQ(s.type, UpdateStrategyType::WEAK_UPDATE);
+}
+
 }  // namespace autoware::multi_object_tracker

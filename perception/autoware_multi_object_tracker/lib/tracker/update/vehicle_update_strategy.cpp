@@ -41,50 +41,61 @@ UpdateStrategy determineUpdateStrategy(
   double tracked_width)
 {
   UpdateStrategy strategy;
-
-  if (!geometry.has_corner || geometry.trust < TRUST_MIN) {
-    strategy.type = UpdateStrategyType::WEAK_UPDATE;
-    return strategy;
-  }
+  strategy.type = UpdateStrategyType::WEAK_UPDATE;
 
   const double pred_yaw = tf2::getYaw(prediction.pose.orientation);
-  // Body axis used to place the anchor: the observed long edge when trustworthy (lets the EKF
-  // rotate toward it via the wheel lever), otherwise the predicted axis (yaw held).
-  const double theta = geometry.yaw_cue_valid ? geometry.long_edge_dir : pred_yaw;
-  const double nx = -std::sin(theta);  // body lateral unit vector
-  const double ny = std::cos(theta);
-
-  // Reconstruct the observed end-face CENTER from the near corner: step inward (toward the tracked
-  // center) by half the tracked width along the lateral axis. Width comes from the tracker, never
-  // from the (possibly inflated / partial) polygon extent.
-  const double to_cx = prediction.pose.position.x - geometry.near_corner.x;
-  const double to_cy = prediction.pose.position.y - geometry.near_corner.y;
-  const double sgn = (nx * to_cx + ny * to_cy) >= 0.0 ? 1.0 : -1.0;
-  geometry_msgs::msg::Point face;
-  face.x = geometry.near_corner.x + sgn * (tracked_width * 0.5) * nx;
-  face.y = geometry.near_corner.y + sgn * (tracked_width * 0.5) * ny;
-  face.z = geometry.near_corner.z;
-
   // Front vs rear from the longitudinal projection onto the predicted body axis.
   const double ux = std::cos(pred_yaw), uy = std::sin(pred_yaw);
-  const double face_proj = face.x * ux + face.y * uy;
   const double center_proj = prediction.pose.position.x * ux + prediction.pose.position.y * uy;
-
-  // Gross-mismatch gate: the reconstructed face must sit near a predicted end face.
   const double half_len = 0.5 * prediction.shape.dimensions.x;
-  const double dist_to_face = std::abs(std::abs(face_proj - center_proj) - half_len);
-  const double max_len = std::max(prediction.shape.dimensions.x, geometry.long_edge_len);
-  const double alignment_threshold =
-    std::max(ALIGNMENT_RATIO_THRESHOLD * max_len, ALIGNMENT_ABSOLUTE_THRESHOLD);
-  if (dist_to_face > alignment_threshold) {
-    strategy.type = UpdateStrategyType::WEAK_UPDATE;
+
+  // Classify a reconstructed end-face center into a front/rear wheel update, rejecting (-> weak) a
+  // face that is grossly inconsistent with a predicted end face.
+  auto finalizeFace = [&](const geometry_msgs::msg::Point & face) {
+    const double face_proj = face.x * ux + face.y * uy;
+    const double dist_to_face = std::abs(std::abs(face_proj - center_proj) - half_len);
+    const double max_len = std::max(prediction.shape.dimensions.x, geometry.long_edge_len);
+    const double alignment_threshold =
+      std::max(ALIGNMENT_RATIO_THRESHOLD * max_len, ALIGNMENT_ABSOLUTE_THRESHOLD);
+    if (dist_to_face > alignment_threshold) {
+      strategy.type = UpdateStrategyType::WEAK_UPDATE;
+      return;
+    }
+    strategy.type = (face_proj >= center_proj) ? UpdateStrategyType::FRONT_WHEEL_UPDATE
+                                               : UpdateStrategyType::REAR_WHEEL_UPDATE;
+    strategy.anchor_point = face;
+  };
+
+  if (geometry.has_corner && geometry.trust >= TRUST_MIN) {
+    // Body axis used to place the anchor: the observed long edge when trustworthy (lets the EKF
+    // rotate toward it via the wheel lever), otherwise the predicted axis (yaw held).
+    const double theta = geometry.yaw_cue_valid ? geometry.long_edge_dir : pred_yaw;
+    const double nx = -std::sin(theta);  // body lateral unit vector
+    const double ny = std::cos(theta);
+
+    // Reconstruct the observed end-face CENTER from the near corner: step inward (toward the
+    // tracked center) by half the tracked width along the lateral axis. Width comes from the
+    // tracker, never from the (possibly inflated / partial) polygon extent.
+    const double to_cx = prediction.pose.position.x - geometry.near_corner.x;
+    const double to_cy = prediction.pose.position.y - geometry.near_corner.y;
+    const double sgn = (nx * to_cx + ny * to_cy) >= 0.0 ? 1.0 : -1.0;
+    geometry_msgs::msg::Point face;
+    face.x = geometry.near_corner.x + sgn * (tracked_width * 0.5) * nx;
+    face.y = geometry.near_corner.y + sgn * (tracked_width * 0.5) * ny;
+    face.z = geometry.near_corner.z;
+    finalizeFace(face);
     return strategy;
   }
 
-  strategy.type = (face_proj >= center_proj) ? UpdateStrategyType::FRONT_WHEEL_UPDATE
-                                             : UpdateStrategyType::REAR_WHEEL_UPDATE;
-  strategy.anchor_point = face;
-  return strategy;
+  if (geometry.has_end_face && geometry.trust >= TRUST_MIN) {
+    // Single visible end face (thin rear/front cluster): the observed edge midpoint IS the end-face
+    // center, so anchor there directly. Partial-width / front-rear uncertainty is absorbed
+    // downstream by correctWheelAnchorLateral (using observed_width) and the gross-mismatch gate.
+    finalizeFace(geometry.end_face_center);
+    return strategy;
+  }
+
+  return strategy;  // WEAK_UPDATE: no usable corner or end-face cue
 }
 
 void createPseudoMeasurement(
