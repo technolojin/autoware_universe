@@ -58,8 +58,7 @@ VehicleTracker::VehicleTracker(
 : Tracker(time, object),
   logger_(rclcpp::get_logger("VehicleTracker")),
   object_model_(object_model),
-  shape_model_(object_model),
-  shape_update_anchor_(BicycleMotionModel::LengthUpdateAnchor::CENTER)
+  shape_model_(object_model)
 {
   // set tracker type based on object model
   switch (object_model.type) {
@@ -233,7 +232,6 @@ bool VehicleTracker::measure(
   shape_model_.updateFootprint(
     corrected, time, has_pose ? std::make_optional(tracker_pose) : std::nullopt);
 
-  shape_update_anchor_ = BicycleMotionModel::LengthUpdateAnchor::CENTER;
   removeCache();
   return true;
 }
@@ -276,6 +274,82 @@ bool VehicleTracker::getTrackedObject(
   return true;
 }
 
+bool VehicleTracker::applyCornerUpdate(
+  const shapes::PolygonMeasurement & meas, const types::DynamicObject & measurement)
+{
+  // The observed corner is the front/rear FACE center plus a lateral half-width offset. With the
+  // lateral normal n frozen at the predicted yaw, that offset s_lat * (width / 2) * n is a
+  // constant, so subtracting it reconstructs the face center and the correction reduces to the
+  // ordinary wheel-anchor EKF (updateStatePoseFront/Rear). The prior width and the front/rear +
+  // lateral association (meas.is_front / meas.s_lat) enter ONLY this reconstruction, never the
+  // Kalman gain, so the innovation carries no self-confirmation. The observation-only corner_cov
+  // becomes the measurement noise R, packed into the x/y block of pose_cov.
+  using autoware_utils_geometry::xyzrpy_covariance_index::XYZRPY_COV_IDX;
+  const double prior_width = shape_model_.getWidth();
+  const double length_before = motion_model_.getLength();
+
+  const double yaw = motion_model_.getYawState();
+  const double half_w = 0.5 * prior_width;
+  const double off_x = meas.s_lat * half_w * (-std::sin(yaw));  // n = (-sin yaw, cos yaw)
+  const double off_y = meas.s_lat * half_w * (std::cos(yaw));
+  const double face_x = meas.corner.x - off_x;
+  const double face_y = meas.corner.y - off_y;
+
+  std::array<double, 36> pose_cov{};
+  pose_cov[XYZRPY_COV_IDX::X_X] = meas.corner_cov[0];
+  pose_cov[XYZRPY_COV_IDX::X_Y] = meas.corner_cov[1];
+  pose_cov[XYZRPY_COV_IDX::Y_X] = meas.corner_cov[2];
+  pose_cov[XYZRPY_COV_IDX::Y_Y] = meas.corner_cov[3];
+
+  // The face center is reconstructed by subtracting the PRIOR half-width along the lateral axis
+  // n, so any error in that prior width biases the reconstructed face center laterally, and the
+  // wheelbase lever amplifies a lateral bias into yaw. The corner_cov above only carries the point
+  // scatter, not this reconstruction error, so the EKF would otherwise treat the prior width as
+  // exact and chase the bias into yaw. Inject the width uncertainty as extra lateral variance
+  // (var_lat * n n^T) so the EKF de-weights the lateral (yaw-driving) channel accordingly. This
+  // is the covariance-side replacement for the old correctWheelAnchorLateral() dead-zone.
+  {
+    constexpr double WIDTH_REL_STD = 0.25;  // 1-sigma relative uncertainty of the prior width
+    const double width_std = WIDTH_REL_STD * half_w;  // std of the s_lat * half_w lateral offset
+    const double var_lat = width_std * width_std;
+    const double s = std::sin(yaw);
+    const double c = std::cos(yaw);  // n = (-sin yaw, cos yaw)
+    pose_cov[XYZRPY_COV_IDX::X_X] += var_lat * s * s;
+    pose_cov[XYZRPY_COV_IDX::X_Y] += -var_lat * s * c;
+    pose_cov[XYZRPY_COV_IDX::Y_X] += -var_lat * s * c;
+    pose_cov[XYZRPY_COV_IDX::Y_Y] += var_lat * c * c;
+  }
+
+  const bool corner_updated = meas.is_front
+                                ? motion_model_.updateStatePoseFront(face_x, face_y, pose_cov)
+                                : motion_model_.updateStatePoseRear(face_x, face_y, pose_cov);
+  if (!corner_updated) return false;
+
+  motion_model_.limitStates();
+
+  // One-sided (grow-only) LENGTH filter. Occlusion only ever shortens what is observed, so a
+  // directly observed extent is a LOWER bound on the true length: it may grow the tracked length
+  // but never shrink it. The grown length is pinned back onto the wheelbase at the observed end
+  // (growth extends the occluded far end), so the position EKF never owns the length. WIDTH is
+  // intentionally NOT touched here: the corner reconstruction consumes the prior width as the
+  // lateral half-width offset, so growing it from a (possibly diagonal / over-merged) polygon would
+  // offset the axles and destabilize the EKF. Width comes only from the bbox detector
+  // (setObjectShape).
+  double target_length = length_before;
+  if (meas.visible_length > target_length) {
+    target_length = std::min(meas.visible_length, object_model_.size_limit.length_max);
+  }
+  const auto length_anchor = meas.is_front ? BicycleMotionModel::LengthUpdateAnchor::FRONT
+                                           : BicycleMotionModel::LengthUpdateAnchor::REAR;
+  motion_model_.updateStateLength(target_length, length_anchor);
+
+  // The wheel-anchor EKF only touches x/y; z position and height come from the real measurement.
+  constexpr double z_gain = 0.4;
+  motion_model_.updateZ(measurement.pose.position.z, z_gain);
+  shape_model_.updateHeight(measurement.shape.dimensions.z);
+  return true;
+}
+
 bool VehicleTracker::conditionedUpdate(
   const types::DynamicObject & measurement, const types::DynamicObject & prediction,
   const autoware_perception_msgs::msg::Shape & tracker_shape, const rclcpp::Time & measurement_time,
@@ -292,81 +366,7 @@ bool VehicleTracker::conditionedUpdate(
     meas = shapes::analyzePolygonMeasurement(measurement, *ego_pos_, prediction);
   }
 
-  bool corner_updated = false;
-  if (meas.has_corner) {
-    // The observed corner is the front/rear FACE center plus a lateral half-width offset. With the
-    // lateral normal n frozen at the predicted yaw, that offset s_lat * (width / 2) * n is a
-    // constant, so subtracting it reconstructs the face center and the correction reduces to the
-    // ordinary wheel-anchor EKF (updateStatePoseFront/Rear). The prior width and the front/rear +
-    // lateral association (meas.is_front / meas.s_lat) enter ONLY this reconstruction, never the
-    // Kalman gain, so the innovation carries no self-confirmation. The observation-only corner_cov
-    // becomes the measurement noise R, packed into the x/y block of pose_cov.
-    using autoware_utils_geometry::xyzrpy_covariance_index::XYZRPY_COV_IDX;
-    const double prior_width = shape_model_.getWidth();
-    const double length_before = motion_model_.getLength();
-
-    const double yaw = motion_model_.getYawState();
-    const double half_w = 0.5 * prior_width;
-    const double off_x = meas.s_lat * half_w * (-std::sin(yaw));  // n = (-sin yaw, cos yaw)
-    const double off_y = meas.s_lat * half_w * (std::cos(yaw));
-    const double face_x = meas.corner.x - off_x;
-    const double face_y = meas.corner.y - off_y;
-
-    std::array<double, 36> pose_cov{};
-    pose_cov[XYZRPY_COV_IDX::X_X] = meas.corner_cov[0];
-    pose_cov[XYZRPY_COV_IDX::X_Y] = meas.corner_cov[1];
-    pose_cov[XYZRPY_COV_IDX::Y_X] = meas.corner_cov[2];
-    pose_cov[XYZRPY_COV_IDX::Y_Y] = meas.corner_cov[3];
-
-    // The face center is reconstructed by subtracting the PRIOR half-width along the lateral axis
-    // n, so any error in that prior width biases the reconstructed face center laterally, and the
-    // wheelbase lever amplifies a lateral bias into yaw. The corner_cov above only carries the point
-    // scatter, not this reconstruction error, so the EKF would otherwise treat the prior width as
-    // exact and chase the bias into yaw. Inject the width uncertainty as extra lateral variance
-    // (var_lat * n n^T) so the EKF de-weights the lateral (yaw-driving) channel accordingly. This
-    // is the covariance-side replacement for the old correctWheelAnchorLateral() dead-zone.
-    {
-      constexpr double WIDTH_REL_STD = 0.25;  // 1-sigma relative uncertainty of the prior width
-      const double width_std = WIDTH_REL_STD * half_w;  // std of the s_lat * half_w lateral offset
-      const double var_lat = width_std * width_std;
-      const double s = std::sin(yaw);
-      const double c = std::cos(yaw);  // n = (-sin yaw, cos yaw)
-      pose_cov[XYZRPY_COV_IDX::X_X] += var_lat * s * s;
-      pose_cov[XYZRPY_COV_IDX::X_Y] += -var_lat * s * c;
-      pose_cov[XYZRPY_COV_IDX::Y_X] += -var_lat * s * c;
-      pose_cov[XYZRPY_COV_IDX::Y_Y] += var_lat * c * c;
-    }
-
-    corner_updated = meas.is_front
-                       ? motion_model_.updateStatePoseFront(face_x, face_y, pose_cov)
-                       : motion_model_.updateStatePoseRear(face_x, face_y, pose_cov);
-
-    if (corner_updated) {
-      motion_model_.limitStates();
-
-      // One-sided (grow-only) LENGTH filter. Occlusion only ever shortens what is observed, so a
-      // directly observed extent is a LOWER bound on the true length: it may grow the tracked
-      // length but never shrink it. The grown length is pinned back onto the wheelbase at the
-      // observed end (growth extends the occluded far end), so the position EKF never owns the
-      // length. WIDTH is intentionally NOT touched here: the corner reconstruction consumes the
-      // prior width as the lateral half-width offset, so growing it from a (possibly diagonal /
-      // over-merged)
-      // polygon would offset the axles and destabilize the EKF. Width comes only from the bbox
-      // detector (setObjectShape).
-      double target_length = length_before;
-      if (meas.visible_length > target_length) {
-        target_length = std::min(meas.visible_length, object_model_.size_limit.length_max);
-      }
-      const auto length_anchor = meas.is_front ? BicycleMotionModel::LengthUpdateAnchor::FRONT
-                                               : BicycleMotionModel::LengthUpdateAnchor::REAR;
-      motion_model_.updateStateLength(target_length, length_anchor);
-
-      // The wheel-anchor EKF only touches x/y; z position and height come from the real measurement.
-      constexpr double z_gain = 0.4;
-      motion_model_.updateZ(measurement.pose.position.z, z_gain);
-      shape_model_.updateHeight(measurement.shape.dimensions.z);
-    }
-  }
+  const bool corner_updated = meas.has_corner && applyCornerUpdate(meas, measurement);
 
   if (!corner_updated) {
     // Weak blended update: no usable corner, or the corner failed the innovation gate.
@@ -390,7 +390,6 @@ bool VehicleTracker::conditionedUpdate(
   shape_model_.updateFootprint(
     measurement, measurement_time, has_pose ? std::make_optional(tracker_pose) : std::nullopt);
 
-  shape_update_anchor_ = BicycleMotionModel::LengthUpdateAnchor::CENTER;
   removeCache();
   return true;
 }
@@ -405,9 +404,11 @@ void VehicleTracker::setObjectShape(const autoware_perception_msgs::msg::Shape &
 {
   const auto new_len = shape_model_.setShape(shape, getLatestMeasurementTime());
   if (new_len) {
-    motion_model_.updateStateLength(*new_len, shape_update_anchor_);
+    // The committed bbox length is centered on the body; the corner-based conditioned update owns
+    // any front/rear-anchored length growth itself, so the externally committed shape always
+    // re-centers the length.
+    motion_model_.updateStateLength(*new_len, BicycleMotionModel::LengthUpdateAnchor::CENTER);
   }
-  shape_update_anchor_ = BicycleMotionModel::LengthUpdateAnchor::CENTER;
 }
 
 }  // namespace autoware::multi_object_tracker

@@ -16,6 +16,7 @@
 #define AUTOWARE__MULTI_OBJECT_TRACKER__TRACKER__TRACKERS__VEHICLE_TRACKER_HPP_
 
 #include "autoware/multi_object_tracker/object_model/object_model.hpp"
+#include "autoware/multi_object_tracker/object_model/shapes.hpp"
 #include "autoware/multi_object_tracker/tracker/motion_model/bicycle_motion_model.hpp"
 #include "autoware/multi_object_tracker/tracker/shape_model/vehicle_shape_model.hpp"
 #include "autoware/multi_object_tracker/tracker/trackers/tracker_base.hpp"
@@ -39,10 +40,6 @@ private:
 
   VehicleShapeModel shape_model_;
 
-  // Tracks which end of the vehicle was used as anchor in the last conditioned update.
-  // Consumed by setObjectShape() so UnstableShapeFilter commits the new length correctly.
-  BicycleMotionModel::LengthUpdateAnchor shape_update_anchor_;
-
   // Latest ego position (map frame), pushed by the processor each frame via setEgoPose().
   // Required to resolve which cluster surfaces are visible in conditionedUpdate().
   std::optional<geometry_msgs::msg::Point> ego_pos_;
@@ -50,6 +47,13 @@ private:
   // EKF kinematic update — selects update variant based on data availability.
   bool updateKinematics(
     const types::DynamicObject & object, const types::InputChannel & channel_info);
+
+  // Corner-based wheel-anchor update. Reconstructs the front/rear FACE center from the observed
+  // corner (subtracting the prior half-width offset at the predicted yaw), feeds it to the
+  // wheel-anchor EKF, then applies the grow-only length and z/height. Returns false when the EKF
+  // rejects the (gated) update, so conditionedUpdate() falls back to the weak blended path.
+  bool applyCornerUpdate(
+    const shapes::PolygonMeasurement & meas, const types::DynamicObject & measurement);
 
 public:
   VehicleTracker(

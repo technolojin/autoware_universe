@@ -16,7 +16,6 @@
 #include "autoware/multi_object_tracker/object_model/shapes.hpp"
 #include "autoware/multi_object_tracker/tracker/motion_model/bicycle_motion_model.hpp"
 #include "autoware/multi_object_tracker/tracker/shape_model/vehicle_shape_model.hpp"
-#include "autoware/multi_object_tracker/tracker/update/vehicle_update_strategy.hpp"
 
 #include <autoware_utils_geometry/msg/covariance.hpp>
 
@@ -293,7 +292,8 @@ TEST(UpdateStatePoseRear, MahalanobisGateRejectsGrossOutlier)
   // Gross mis-association: a reconstructed rear face center 20 m off laterally with a tight
   // covariance (the regime that previously slammed the estimate into a wrong / merged cluster). The
   // Mahalanobis gate must REJECT it (return false) and leave the state untouched. This locks in the
-  // outlier protection that was lost when updateStatePoseCorner was folded into the front/rear path.
+  // outlier protection that was lost when updateStatePoseCorner was folded into the front/rear
+  // path.
   std::array<double, 36> corner_cov{};
   corner_cov[XYZRPY_COV_IDX::X_X] = 0.01;
   corner_cov[XYZRPY_COV_IDX::Y_Y] = 0.01;

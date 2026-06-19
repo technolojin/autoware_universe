@@ -20,7 +20,6 @@
 #include <geometry_msgs/msg/point.hpp>
 
 #include <array>
-#include <limits>
 #include <optional>
 #include <utility>
 
