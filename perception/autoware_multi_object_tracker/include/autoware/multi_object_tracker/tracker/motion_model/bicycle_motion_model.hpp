@@ -127,7 +127,9 @@ public:
   // linear in the two-point state:
   //   corner = (1 + g) * p_near - g * p_far + s_lat * (width / 2) * n_pred
   // with (g, p_near, p_far) the front or rear endpoint blend (as updateStatePoseFront/Rear) and
-  // n_pred = (-sin yaw, cos yaw). Corrects the x/y endpoints only.
+  // n_pred = (-sin yaw, cos yaw). Corrects the x/y endpoints only. A Mahalanobis gate on the corner
+  // innovation rejects gross outliers (mis-association / merged cluster); returns false (no update)
+  // when gated out, when S is not decomposable, or when the state is uninitialized.
   bool updateStatePoseCorner(
     const double & cx, const double & cy, const std::array<double, 4> & corner_cov,
     const bool is_front, const double s_lat, const double width);

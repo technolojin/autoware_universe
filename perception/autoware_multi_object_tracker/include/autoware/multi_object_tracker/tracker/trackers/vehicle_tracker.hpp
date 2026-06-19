@@ -50,13 +50,6 @@ private:
   // EKF kinematic update — selects update variant based on data availability.
   bool updateKinematics(
     const types::DynamicObject & object, const types::InputChannel & channel_info);
-  // Wheel-anchor EKF update (front or rear) plus z/height updates.
-  // Also records the anchor in shape_update_anchor_. `observed_width` is the cluster's visible
-  // lateral extent (from analyzePolygonGeometry); `prediction` supplies the tracked body center
-  // used by the lateral (over-/under-wide polygon) anchor correction.
-  bool updateWheelKinematics(
-    const UpdateStrategy & strategy, const types::DynamicObject & measurement,
-    double observed_width, const types::DynamicObject & prediction);
 
 public:
   VehicleTracker(

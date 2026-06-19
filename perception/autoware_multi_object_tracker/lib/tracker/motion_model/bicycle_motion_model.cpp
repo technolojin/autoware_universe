@@ -16,6 +16,7 @@
 
 #include "autoware/multi_object_tracker/tracker/motion_model/bicycle_motion_model.hpp"
 
+#include <Eigen/Cholesky>
 #include <Eigen/Core>
 #include <Eigen/Geometry>
 #include <autoware_utils_geometry/msg/covariance.hpp>
@@ -358,6 +359,24 @@ bool BicycleMotionModel::updateStatePoseCorner(
   R(0, 1) = corner_cov[1];
   R(1, 0) = corner_cov[2];
   R(1, 1) = corner_cov[3];
+
+  // Mahalanobis gate on the corner innovation. The innovation Y - C*x equals observed_corner -
+  // predicted_corner (offset already folded into Y), and S = C P C^T + R is its covariance. A gross
+  // mismatch (mis-association, a wrong / merged cluster) is rejected so it never corrupts the
+  // state; a merely large-but-plausible innovation (motion lag, a real shape change) still passes
+  // and is corrected at the Kalman-gain rate — the gate guards against outliers, not against honest
+  // change.
+  constexpr double CORNER_GATE_MAHALANOBIS_SQ = 13.8;  // chi-square, 2 DOF, ~99.9%
+  StateVec X_t;
+  StateMat P_t;
+  ekf_.getX(X_t);
+  ekf_.getP(P_t);
+  const Eigen::Matrix<double, DIM_Y, 1> innovation = Y - C * X_t;
+  const Eigen::Matrix<double, DIM_Y, DIM_Y> S = C * P_t * C.transpose() + R;
+  const Eigen::LDLT<Eigen::Matrix<double, DIM_Y, DIM_Y>> ldlt(S);
+  if (ldlt.info() != Eigen::Success) return false;
+  const double mahalanobis_sq = innovation.dot(ldlt.solve(innovation));
+  if (mahalanobis_sq > CORNER_GATE_MAHALANOBIS_SQ) return false;
 
   return ekf_.update(Y, C, R);
 }

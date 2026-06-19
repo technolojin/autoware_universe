@@ -203,54 +203,6 @@ bool VehicleTracker::updateKinematics(
   return is_updated;
 }
 
-bool VehicleTracker::updateWheelKinematics(
-  const UpdateStrategy & strategy, const types::DynamicObject & measurement, double observed_width,
-  const types::DynamicObject & prediction)
-{
-  std::array<double, 36> pose_cov = measurement.pose_covariance;
-
-  // Lateral correction for the observed edge center when the polygon width disagrees with the
-  // tracked width (partial view -> narrower, merged/over-segmented cluster -> wider). The wheel
-  // update measures the front/rear edge center; a biased lateral center is amplified into yaw
-  // through the wheel-base lever. correctWheelAnchorLateral() nudges the anchor (over-wide
-  // "back-lash" dead-zone) and reports the extra lateral variance to add. See its documentation.
-  geometry_msgs::msg::Point anchor_point = strategy.anchor_point;
-  {
-    using autoware_utils_geometry::xyzrpy_covariance_index::XYZRPY_COV_IDX;
-    constexpr double balance_alpha = 0.2;  // hold-tracker slope inside the dead-zone
-    constexpr double corner_residual_beta =
-      0.3;  // residual std fraction once the corner is matched
-    const double yaw = motion_model_.getYawState();
-    const auto corr = correctWheelAnchorLateral(
-      yaw, shape_model_.getWidth(), prediction.pose.position, observed_width, strategy.anchor_point,
-      balance_alpha, corner_residual_beta);
-    anchor_point = corr.anchor;
-
-    const double var_lat = corr.var_lat;
-    const double s = std::sin(yaw);
-    const double c = std::cos(yaw);
-    // lateral unit vector n = (-sin(yaw), cos(yaw)); add var_lat * n * n^T to the x/y block
-    pose_cov[XYZRPY_COV_IDX::X_X] += var_lat * s * s;
-    pose_cov[XYZRPY_COV_IDX::X_Y] += -var_lat * s * c;
-    pose_cov[XYZRPY_COV_IDX::Y_X] += -var_lat * s * c;
-    pose_cov[XYZRPY_COV_IDX::Y_Y] += var_lat * c * c;
-  }
-
-  bool is_updated = false;
-  if (strategy.type == UpdateStrategyType::FRONT_WHEEL_UPDATE) {
-    shape_update_anchor_ = BicycleMotionModel::LengthUpdateAnchor::FRONT;
-    is_updated = motion_model_.updateStatePoseFront(anchor_point.x, anchor_point.y, pose_cov);
-  } else {
-    shape_update_anchor_ = BicycleMotionModel::LengthUpdateAnchor::REAR;
-    is_updated = motion_model_.updateStatePoseRear(anchor_point.x, anchor_point.y, pose_cov);
-  }
-  // Wheel-anchor EKF only updates x/y; z position and height are applied here.
-  constexpr double z_gain = 0.4;
-  motion_model_.updateZ(measurement.pose.position.z, z_gain);
-  shape_model_.updateHeight(measurement.shape.dimensions.z);
-  return is_updated;
-}
-
 bool VehicleTracker::measure(
   const types::DynamicObject & in_object, const rclcpp::Time & time,
   const types::InputChannel & channel_info)
@@ -329,20 +281,55 @@ bool VehicleTracker::conditionedUpdate(
   const autoware_perception_msgs::msg::Shape & tracker_shape, const rclcpp::Time & measurement_time,
   const types::InputChannel & channel_info)
 {
-  // Analyze the raw cluster polygon into corner / orientation cues, decoupled from the filter.
-  // Requires the ego position to resolve which surfaces are visible; without it (or without a
-  // reliable two-face corner) we fall back to the weak blended update.
-  shapes::PolygonGeometry geom;
-  UpdateStrategy strategy;
-  strategy.type = UpdateStrategyType::WEAK_UPDATE;
+  // Observation-only corner measurement from the raw cluster polygon, decoupled from the filter.
+  // Requires the ego position to resolve which surfaces are visible; without it (or without two
+  // statistically distinct ego-facing faces) we fall back to the weak blended update.
+  shapes::PolygonMeasurement meas;
   if (
     ego_pos_ && measurement.shape.type == autoware_perception_msgs::msg::Shape::POLYGON &&
     !measurement.shape.footprint.points.empty()) {
-    geom = shapes::analyzePolygonGeometry(measurement, *ego_pos_, prediction);
-    strategy = determineUpdateStrategy(geom, prediction, shape_model_.getWidth());
+    meas = shapes::analyzePolygonMeasurement(measurement, *ego_pos_, prediction);
   }
 
-  if (strategy.type == UpdateStrategyType::WEAK_UPDATE) {
+  bool corner_updated = false;
+  if (meas.has_corner) {
+    // Associate the observed corner to the nearest predicted box corner -> front/rear + lateral
+    // sign. This discrete choice is the ONLY place the prior pose enters the corner update.
+    const CornerAssociation assoc = associateCornerToPrediction(meas.corner, prediction);
+
+    // Gated EKF corner update. The corner mean and covariance are observation-only; the prior width
+    // rides only in the predicted measurement (see BicycleMotionModel::updateStatePoseCorner). A
+    // gross innovation (mis-association / merged cluster) is gated out and returns false.
+    const double prior_width = shape_model_.getWidth();
+    const double length_before = motion_model_.getLength();
+    corner_updated = motion_model_.updateStatePoseCorner(
+      meas.corner.x, meas.corner.y, meas.corner_cov, assoc.is_front, assoc.s_lat, prior_width);
+
+    if (corner_updated) {
+      motion_model_.limitStates();
+
+      // One-sided (grow-only) dimension filter. Occlusion only ever shortens what is observed, so a
+      // directly observed extent is a LOWER bound on the true size: it may grow a tracked dimension
+      // but never shrink it. The grown length is pinned back onto the wheelbase at the observed end
+      // (growth extends the occluded far end), so the position EKF never owns the length.
+      double target_length = length_before;
+      if (meas.visible_length > target_length) {
+        target_length = std::min(meas.visible_length, object_model_.size_limit.length_max);
+      }
+      const auto length_anchor = assoc.is_front ? BicycleMotionModel::LengthUpdateAnchor::FRONT
+                                                : BicycleMotionModel::LengthUpdateAnchor::REAR;
+      motion_model_.updateStateLength(target_length, length_anchor);
+      shape_model_.growWidth(meas.visible_width);
+
+      // The corner EKF only touches x/y; z position and height come from the real measurement.
+      constexpr double z_gain = 0.4;
+      motion_model_.updateZ(measurement.pose.position.z, z_gain);
+      shape_model_.updateHeight(measurement.shape.dimensions.z);
+    }
+  }
+
+  if (!corner_updated) {
+    // Weak blended update: no usable corner, or the corner failed the innovation gate.
     types::DynamicObject pseudo_measurement = prediction;
     createPseudoMeasurement(measurement, pseudo_measurement, tracker_shape, true);
 
@@ -350,29 +337,11 @@ bool VehicleTracker::conditionedUpdate(
       normalizeYaw(pseudo_measurement, motion_model_.getYawState());
     updateKinematics(pseudo_corrected, channel_info);
 
-    // Only update height from real measurement (z-span of polygon cluster is reliable)
+    // Only update height from the real measurement (z-span of the polygon cluster is reliable).
     shape_model_.updateHeight(measurement.shape.dimensions.z);
-
-    // Store footprint from the real measurement using the post-update tracker pose
-    geometry_msgs::msg::Pose tracker_pose;
-    std::array<double, 36> dummy_cov{};
-    geometry_msgs::msg::Twist dummy_twist;
-    const bool has_pose = motion_model_.getPredictedState(
-      measurement_time, tracker_pose, dummy_cov, dummy_twist, dummy_cov);
-    shape_model_.updateFootprint(
-      measurement, measurement_time, has_pose ? std::make_optional(tracker_pose) : std::nullopt);
-
-    shape_update_anchor_ = BicycleMotionModel::LengthUpdateAnchor::CENTER;
-    removeCache();
-    return true;
   }
 
-  // Corner-based wheel update. The anchor is the observed end-face center reconstructed from the
-  // near corner and tracked width; yaw is carried implicitly by the wheel lever (held when the
-  // long-edge tangent is untrustworthy, see determineUpdateStrategy).
-  const bool is_updated =
-    updateWheelKinematics(strategy, measurement, geom.observed_width, prediction);
-
+  // Store footprint from the real measurement using the post-update tracker pose.
   geometry_msgs::msg::Pose tracker_pose;
   std::array<double, 36> dummy_cov{};
   geometry_msgs::msg::Twist dummy_twist;
@@ -383,7 +352,7 @@ bool VehicleTracker::conditionedUpdate(
 
   shape_update_anchor_ = BicycleMotionModel::LengthUpdateAnchor::CENTER;
   removeCache();
-  return is_updated;
+  return true;
 }
 
 void VehicleTracker::assembleShapeTo(types::DynamicObject & output, bool /*to_publish*/) const

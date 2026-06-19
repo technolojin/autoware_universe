@@ -50,67 +50,6 @@ bool convertConvexHullToBoundingBox(
 std::optional<types::DynamicObject> alignClusterToOrientation(
   const types::DynamicObject & cluster, double target_yaw);
 
-// Classification of why an observed polygon is larger / differently shaped than the track.
-enum class PolygonInflation {
-  NONE,                   // observed extent consistent with the tracked shape
-  NOISE,                  // a thin spike vertex (e.g. rain return) inflates the hull
-  FAULTY,                 // bimodal / over-wide hull (merge or over-segmentation)
-  SHAPE_CHANGE_CANDIDATE  // localized persistent extent growth (e.g. door opening); needs
-                          // temporal confirmation before being trusted
-};
-
-// Geometry extracted from a single vehicle cluster polygon, decoupled from any filter state.
-// A LiDAR vehicle cluster observes at most an L-shape: one long side + one end face meeting at the
-// near corner; the far hull boundary is silhouette closure across the occluded region, not real
-// surface. Only ego-facing edges are treated as real measurements. Confidences are continuous so
-// the caller can scale measurement variance (and hold yaw when a cue is unreliable) rather than
-// hard-accept / hard-reject.
-struct PolygonGeometry
-{
-  // Near corner — the ego-facing junction of the two visible faces (the L corner), map frame.
-  geometry_msgs::msg::Point near_corner;
-  bool has_corner = false;  // true only when a genuine two-face corner was found
-
-  // Single visible end face — set when only ONE face is observed (a thin rear/front cluster: no
-  // L-corner, so has_corner is false). The visible edge IS the end face, so its midpoint is the
-  // observed end-face center directly (no corner step). In this mode long_edge_dir is the edge
-  // tangent (the body LATERAL axis, not the longitudinal one) and observed_width is the edge
-  // length; yaw_cue_valid stays false (a lateral tangent is not a heading cue). Lets the caller
-  // anchor the box at the visible face instead of blending its centroid onto the box center.
-  bool has_end_face = false;
-  geometry_msgs::msg::Point end_face_center;  // map frame, midpoint of the visible end edge
-
-  // Orientation cue from the longer visible edge tangent (map-frame yaw, direction only — never
-  // used as a length). yaw_variance is continuous: large for short / rounded / poorly supported
-  // edges so the caller naturally holds yaw. yaw_cue_valid is the floor flag (length & straightness
-  // & roughly parallel to the predicted body axis).
-  double long_edge_dir = 0.0;
-  double long_edge_len = 0.0;
-  double yaw_variance = std::numeric_limits<double>::max();
-  bool yaw_cue_valid = false;
-
-  // Lateral extent of the visible side, perpendicular to long_edge_dir [m]; confidence in [0,1].
-  // Intentionally decoupled from vehicle length.
-  double observed_width = 0.0;
-  double observed_width_confidence = 0.0;
-
-  double roundness = 1.0;  // [0,1]; 1 = no straight edge resolvable
-  PolygonInflation inflation = PolygonInflation::NONE;
-  double trust = 0.0;  // overall [0,1] for the caller's path choice
-};
-
-// Analyze a vehicle cluster polygon into orientation / anchor cues with confidences.
-// `cluster` is a POLYGON DynamicObject (footprint in cluster-local frame, pose in map frame);
-// `ego_pos` is the sensor/ego position in map frame (required to resolve which surfaces are
-// visible); `prediction` is the tracked object (map pose + bbox dims) used as the reference for
-// 180-deg / front-rear disambiguation and width comparison. When no reliable two-face corner can
-// be extracted but a single ego-facing end face is visible (a thin rear/front cluster), the result
-// carries has_end_face=true with the observed end-face center. Returns has_corner=false /
-// has_end_face=false / trust=0 when neither cue can be extracted.
-PolygonGeometry analyzePolygonGeometry(
-  const types::DynamicObject & cluster, const geometry_msgs::msg::Point & ego_pos,
-  const types::DynamicObject & prediction);
-
 // Observation-only polygon measurement for the corner-based vehicle update. Every field is a pure
 // function of the cluster footprint and the sensor geometry — NO prior (tracked center / yaw /
 // width / length) enters the mean OR the covariance. The prior is consumed strictly downstream as
