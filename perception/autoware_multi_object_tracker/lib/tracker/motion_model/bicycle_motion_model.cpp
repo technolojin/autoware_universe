@@ -247,6 +247,27 @@ bool BicycleMotionModel::updateStatePoseHeadVel(
   return ekf_.update(Y, C, R);
 }
 
+bool BicycleMotionModel::passesPoseGate(
+  const Eigen::Matrix<double, 2, 1> & Y, const Eigen::Matrix<double, 2, DIM> & C,
+  const Eigen::Matrix<double, 2, 2> & R) const
+{
+  // Mahalanobis gate on the pose innovation. S = C P C^T + R is the innovation covariance; a gross
+  // mismatch (corner mis-association, a merged / wrong cluster) is rejected before it corrupts the
+  // state, while a large-but-plausible innovation (motion lag, a real shape change) still passes and
+  // is corrected at the Kalman-gain rate -- the gate guards against outliers, not against honest
+  // change.
+  constexpr double POSE_GATE_MAHALANOBIS_SQ = 13.8;  // chi-square, 2 DOF, ~99.9%
+  StateVec X_t;
+  StateMat P_t;
+  ekf_.getX(X_t);
+  ekf_.getP(P_t);
+  const Eigen::Matrix<double, 2, 1> innovation = Y - C * X_t;
+  const Eigen::Matrix<double, 2, 2> S = C * P_t * C.transpose() + R;
+  const Eigen::LDLT<Eigen::Matrix<double, 2, 2>> ldlt(S);
+  if (ldlt.info() != Eigen::Success) return false;
+  return innovation.dot(ldlt.solve(innovation)) <= POSE_GATE_MAHALANOBIS_SQ;
+}
+
 bool BicycleMotionModel::updateStatePoseRear(
   const double & xr, const double & yr, const std::array<double, 36> & pose_cov)
 {
@@ -279,6 +300,7 @@ bool BicycleMotionModel::updateStatePoseRear(
   R(1, 0) = pose_cov[XYZRPY_COV_IDX::Y_X];
   R(1, 1) = pose_cov[XYZRPY_COV_IDX::Y_Y];
 
+  if (!passesPoseGate(Y, C, R)) return false;
   return ekf_.update(Y, C, R);
 }
 
@@ -308,6 +330,7 @@ bool BicycleMotionModel::updateStatePoseFront(
   R(1, 0) = pose_cov[XYZRPY_COV_IDX::Y_X];
   R(1, 1) = pose_cov[XYZRPY_COV_IDX::Y_Y];
 
+  if (!passesPoseGate(Y, C, R)) return false;
   return ekf_.update(Y, C, R);
 }
 

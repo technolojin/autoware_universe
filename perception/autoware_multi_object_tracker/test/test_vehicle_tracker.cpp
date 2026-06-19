@@ -274,4 +274,37 @@ TEST(UpdateStatePoseRear, MovesEstimateTowardReconstructedCorner)
   EXPECT_NEAR(pose1.position.x, 10.0, 0.1);       // longitudinal ~unchanged
 }
 
+TEST(UpdateStatePoseRear, MahalanobisGateRejectsGrossOutlier)
+{
+  BicycleMotionModel model;
+  const rclcpp::Time t(0, 0, RCL_ROS_TIME);
+  std::array<double, 36> pose_cov{};
+  using autoware_utils_geometry::xyzrpy_covariance_index::XYZRPY_COV_IDX;
+  pose_cov[XYZRPY_COV_IDX::X_X] = 1.0;
+  pose_cov[XYZRPY_COV_IDX::Y_Y] = 1.0;
+  // Box centered at (10,0), yaw 0, length 4. Rear face center is at (8,0).
+  ASSERT_TRUE(model.initialize(t, 10.0, 0.0, 0.0, pose_cov, 0.0, 1.0, 0.0, 1.0, 4.0));
+
+  geometry_msgs::msg::Pose pose0;
+  std::array<double, 36> c0{};
+  geometry_msgs::msg::Twist tw0;
+  ASSERT_TRUE(model.getPredictedState(t, pose0, c0, tw0, c0));
+
+  // Gross mis-association: a reconstructed rear face center 20 m off laterally with a tight
+  // covariance (the regime that previously slammed the estimate into a wrong / merged cluster). The
+  // Mahalanobis gate must REJECT it (return false) and leave the state untouched. This locks in the
+  // outlier protection that was lost when updateStatePoseCorner was folded into the front/rear path.
+  std::array<double, 36> corner_cov{};
+  corner_cov[XYZRPY_COV_IDX::X_X] = 0.01;
+  corner_cov[XYZRPY_COV_IDX::Y_Y] = 0.01;
+  EXPECT_FALSE(model.updateStatePoseRear(8.0, 20.0, corner_cov));
+
+  geometry_msgs::msg::Pose pose1;
+  std::array<double, 36> c1{};
+  geometry_msgs::msg::Twist tw1;
+  ASSERT_TRUE(model.getPredictedState(t, pose1, c1, tw1, c1));
+  EXPECT_NEAR(pose1.position.x, pose0.position.x, 1e-9);  // state unchanged: outlier rejected
+  EXPECT_NEAR(pose1.position.y, pose0.position.y, 1e-9);
+}
+
 }  // namespace autoware::multi_object_tracker

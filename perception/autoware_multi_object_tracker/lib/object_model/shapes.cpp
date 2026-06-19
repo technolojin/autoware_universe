@@ -473,9 +473,17 @@ PolygonMeasurement analyzePolygonMeasurement(
   // No ego-facing surface resolved at all -> no usable corner; caller takes the weak/blended path.
   if (!lon_face && !lat_face) return m;
 
+  // Per-axis corner-position variance. The corner is read as the cluster EXTREME on each axis (a
+  // max/min projection), NOT the mean of a fitted plane, so its uncertainty does NOT shrink as
+  // s2/N: an extreme is biased outward, dominated by the single worst point, and the clustering
+  // jitter / occlusion-boundary scatter does not average away. We therefore set the variance of a
+  // resolved face to the single-point scatter (independent of the support count) rather than the
+  // mean-of-N variance s2/N. (The old s2/N collapsed R to ~cm on a well-sampled face and drove the
+  // EKF to chase per-frame extreme jitter, injecting it into position and, via the wheelbase lever,
+  // into yaw.)
   const double s2 = LIDAR_POINT_STD * LIDAR_POINT_STD;
-  const double var_u = lon_face ? s2 / static_cast<double>(n_lon) : UNOBSERVED_VAR;
-  const double var_n = lat_face ? s2 / static_cast<double>(n_lat) : UNOBSERVED_VAR;
+  const double var_u = lon_face ? s2 : UNOBSERVED_VAR;
+  const double var_n = lat_face ? s2 : UNOBSERVED_VAR;
 
   // Corner back in the map frame, and its covariance rotated from the (u, n) box frame.
   m.has_corner = true;

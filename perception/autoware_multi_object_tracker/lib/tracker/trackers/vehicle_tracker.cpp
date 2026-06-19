@@ -318,6 +318,25 @@ bool VehicleTracker::conditionedUpdate(
     pose_cov[XYZRPY_COV_IDX::Y_X] = meas.corner_cov[2];
     pose_cov[XYZRPY_COV_IDX::Y_Y] = meas.corner_cov[3];
 
+    // The face center is reconstructed by subtracting the PRIOR half-width along the lateral axis
+    // n, so any error in that prior width biases the reconstructed face center laterally, and the
+    // wheelbase lever amplifies a lateral bias into yaw. The corner_cov above only carries the point
+    // scatter, not this reconstruction error, so the EKF would otherwise treat the prior width as
+    // exact and chase the bias into yaw. Inject the width uncertainty as extra lateral variance
+    // (var_lat * n n^T) so the EKF de-weights the lateral (yaw-driving) channel accordingly. This
+    // is the covariance-side replacement for the old correctWheelAnchorLateral() dead-zone.
+    {
+      constexpr double WIDTH_REL_STD = 0.25;  // 1-sigma relative uncertainty of the prior width
+      const double width_std = WIDTH_REL_STD * half_w;  // std of the s_lat * half_w lateral offset
+      const double var_lat = width_std * width_std;
+      const double s = std::sin(yaw);
+      const double c = std::cos(yaw);  // n = (-sin yaw, cos yaw)
+      pose_cov[XYZRPY_COV_IDX::X_X] += var_lat * s * s;
+      pose_cov[XYZRPY_COV_IDX::X_Y] += -var_lat * s * c;
+      pose_cov[XYZRPY_COV_IDX::Y_X] += -var_lat * s * c;
+      pose_cov[XYZRPY_COV_IDX::Y_Y] += var_lat * c * c;
+    }
+
     corner_updated = meas.is_front
                        ? motion_model_.updateStatePoseFront(face_x, face_y, pose_cov)
                        : motion_model_.updateStatePoseRear(face_x, face_y, pose_cov);

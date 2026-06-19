@@ -131,6 +131,14 @@ public:
   bool getPredictedState(
     const rclcpp::Time & time, geometry_msgs::msg::Pose & pose, std::array<double, 36> & pose_cov,
     geometry_msgs::msg::Twist & twist, std::array<double, 36> & twist_cov) const override;
+
+private:
+  // Mahalanobis gate for the 2-DOF wheel-anchor pose updates (updateStatePoseFront/Rear). Rejects
+  // gross corner mis-associations / merged clusters before they corrupt the state; returns false
+  // (skip the update) when the measurement fails the gate or the innovation covariance is singular.
+  bool passesPoseGate(
+    const Eigen::Matrix<double, 2, 1> & Y, const Eigen::Matrix<double, 2, DIM> & C,
+    const Eigen::Matrix<double, 2, 2> & R) const;
 };
 
 }  // namespace autoware::multi_object_tracker
