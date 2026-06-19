@@ -27,28 +27,6 @@
 namespace autoware::multi_object_tracker
 {
 
-CornerAssociation associateCornerToPrediction(
-  const geometry_msgs::msg::Point & corner, const types::DynamicObject & prediction)
-{
-  const double pred_yaw = tf2::getYaw(prediction.pose.orientation);
-  // Body longitudinal axis u and lateral axis n = (-sin, cos).
-  const double ux = std::cos(pred_yaw), uy = std::sin(pred_yaw);
-  const double nx = -uy, ny = ux;
-
-  // Offset of the observed corner from the predicted center, decomposed onto the body axes. The
-  // nearest box corner is the one in the same longitudinal / lateral quadrant, so the signs alone
-  // pick the front/rear + left/right association (corners sit at +/- half_len, +/- half_wid).
-  const double dx = corner.x - prediction.pose.position.x;
-  const double dy = corner.y - prediction.pose.position.y;
-  const double along = dx * ux + dy * uy;
-  const double lat = dx * nx + dy * ny;
-
-  CornerAssociation assoc;
-  assoc.is_front = along >= 0.0;
-  assoc.s_lat = lat >= 0.0 ? 1.0 : -1.0;
-  return assoc;
-}
-
 void createPseudoMeasurement(
   const types::DynamicObject & meas, types::DynamicObject & pred,
   const autoware_perception_msgs::msg::Shape & tracker_shape, const bool enlarge_covariance)

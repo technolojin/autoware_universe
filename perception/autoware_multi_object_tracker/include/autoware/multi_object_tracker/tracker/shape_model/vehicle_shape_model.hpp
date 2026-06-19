@@ -64,12 +64,6 @@ public:
   // Blend height only (used by conditioned-update WEAK and wheel paths)
   void updateHeight(double z_measurement);
 
-  // One-sided (grow-only) width update for the corner-based conditioned path. A directly observed
-  // visible width is a LOWER bound on the true width (occlusion only shortens what is seen), so it
-  // may grow the tracked width (capped at the size limit) but never shrink it. No-op for a
-  // non-positive observation.
-  void growWidth(double visible_width);
-
   // Called when UnstableShapeFilter commits a new stable shape.
   // Stores new width/height/footprint; returns new vehicle length when shape is BOUNDING_BOX
   // (caller should sync motion model length with the returned value).

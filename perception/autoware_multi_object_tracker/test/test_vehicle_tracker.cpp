@@ -33,15 +33,6 @@ namespace autoware::multi_object_tracker
 {
 namespace
 {
-geometry_msgs::msg::Point makePoint(double x, double y)
-{
-  geometry_msgs::msg::Point p;
-  p.x = x;
-  p.y = y;
-  p.z = 0.0;
-  return p;
-}
-
 geometry_msgs::msg::Pose makePose(double x, double y, double yaw)
 {
   geometry_msgs::msg::Pose p;
@@ -98,11 +89,6 @@ geometry_msgs::msg::Point makeEgo(double x, double y)
   e.z = 0.0;
   return e;
 }
-
-double wrapToPi(double a)
-{
-  return std::atan2(std::sin(a), std::cos(a));
-}
 }  // namespace
 
 // --- analyzePolygonMeasurement (observation-only corner) ---------------------------------------
@@ -119,9 +105,11 @@ double nearestVertexDist(const types::DynamicObject & cluster, double tx, double
 }
 }  // namespace
 
-// A clean L: the corner is the intersection of the two visible faces; here that coincides with the
-// sampled vertex (8, -1). Heading runs along the long (bottom) face.
-TEST(AnalyzePolygonMeasurement, LShapeCornerIsLineIntersection)
+// A clean L: the visible corner is the cluster's ego-facing extreme read in the predicted box
+// frame. Ego is behind-and-right of the box, so the rear-right corner (8, -1) is measured, and the
+// association reports rear (is_front=false) / right (s_lat=-1). Both faces are resolved -> the
+// covariance is a valid, well-conditioned 2x2.
+TEST(AnalyzePolygonMeasurement, LShapeCornerIsBoxFrameExtreme)
 {
   const auto cluster = makePolyCluster({{8, -1}, {12, -1}, {12, 1}, {8, 1}});
   const auto pred = makeBox(10.0, 0.0, 0.0, 4.0, 2.0);
@@ -130,18 +118,19 @@ TEST(AnalyzePolygonMeasurement, LShapeCornerIsLineIntersection)
   EXPECT_TRUE(m.has_corner);
   EXPECT_NEAR(m.corner.x, 8.0, 1e-6);
   EXPECT_NEAR(m.corner.y, -1.0, 1e-6);
-  EXPECT_TRUE(m.has_yaw);
-  EXPECT_NEAR(wrapToPi(m.yaw), 0.0, 0.05);
+  EXPECT_FALSE(m.is_front);
+  EXPECT_DOUBLE_EQ(m.s_lat, -1.0);
   // Covariance is a valid 2x2 (PD): positive diagonal and positive determinant.
   EXPECT_GT(m.corner_cov[0], 0.0);
   EXPECT_GT(m.corner_cov[3], 0.0);
   EXPECT_GT(m.corner_cov[0] * m.corner_cov[3] - m.corner_cov[1] * m.corner_cov[2], 0.0);
 }
 
-// Rounding-immunity: the true corner (8, -1) is cut away (no vertex sits there). The intersection
-// of the two fitted faces still lands on the true corner, whereas the closest SAMPLED vertex — what
-// the old nearest-point rule would have anchored on — is far off. This is the core fix.
-TEST(AnalyzePolygonMeasurement, RoundedCornerRecoversTrueCorner)
+// Rounding-immunity: the true corner (8, -1) is cut away (no vertex sits there). Because the corner
+// is read as the box-frame EXTENT intersection — min-x of the left face, min-y of the bottom face —
+// it still lands exactly on the true corner, whereas the closest SAMPLED vertex (what a nearest-
+// vertex rule would anchor on) is far off. This is the core of the prior-driven extraction.
+TEST(AnalyzePolygonMeasurement, RoundedCornerRecoversBoxExtreme)
 {
   // Long clean left face (x=8) and bottom face (y=-1); the (8,-1) corner is replaced by a chamfer.
   const auto cluster = makePolyCluster({
@@ -161,29 +150,66 @@ TEST(AnalyzePolygonMeasurement, RoundedCornerRecoversTrueCorner)
   const auto m = shapes::analyzePolygonMeasurement(cluster, makeEgo(0.0, -10.0), pred);
 
   ASSERT_TRUE(m.has_corner);
-  // The recovered corner sits on the true corner well within the chamfer cut-out; the closest
-  // SAMPLED vertex (what the old nearest-point rule anchored on) is far further away. The residual
-  // bias here is the single synthetic chamfer point pulling one fit — real multi-point rounding
-  // averages out better. This contrast is the core fix: face intersection, not a vertex apex.
   const double recovered_err = std::hypot(m.corner.x - 8.0, m.corner.y + 1.0);
-  EXPECT_LT(recovered_err, 0.25);
+  EXPECT_LT(recovered_err, 1e-6);
   EXPECT_GT(nearestVertexDist(cluster, 8.0, -1.0), 0.35);
   EXPECT_LT(recovered_err, nearestVertexDist(cluster, 8.0, -1.0));
 }
 
-// A single visible face (thin rear cluster, one face only) resolves no corner: has_corner=false.
-// The caller keeps the (separate) single-face / weak path; we do not fabricate a corner.
-TEST(AnalyzePolygonMeasurement, SingleFaceHasNoCorner)
+// A single visible face (thin cluster, only the rear face resolved) still yields a corner, but with
+// an anisotropic covariance: the axis the face localizes (here longitudinal / x) is tight, while
+// the unobserved axis (lateral / y — we cannot see how far the body extends sideways) is left
+// nearly unconstrained. The EKF then corrects only the well-observed direction.
+TEST(AnalyzePolygonMeasurement, SingleFaceGivesAnisotropicCovariance)
 {
   const auto cluster = makePolyCluster({{8, -1}, {8.2, -1}, {8.2, 1}, {8, 1}});
   const auto pred = makeBox(10.0, 0.0, 0.0, 4.0, 2.0);
   const auto m = shapes::analyzePolygonMeasurement(cluster, makeEgo(0.0, 0.0), pred);
 
-  EXPECT_FALSE(m.has_corner);
+  ASSERT_TRUE(m.has_corner);
+  EXPECT_NEAR(m.corner.x, 8.0, 1e-6);  // longitudinal face position is observed
+  // yy (lateral, unobserved) is orders of magnitude larger than xx (longitudinal, observed).
+  EXPECT_GT(m.corner_cov[3], 100.0 * m.corner_cov[0]);
+  // Still a valid PD covariance.
+  EXPECT_GT(m.corner_cov[0] * m.corner_cov[3] - m.corner_cov[1] * m.corner_cov[2], 0.0);
 }
 
-// A rounded body (12-gon, 30 deg turns) has no two statistically distinct faces: no corner.
-TEST(AnalyzePolygonMeasurement, RoundedBodyHasNoCorner)
+// The ego-facing side selects which box corner is measured: moving ego around the same box yields
+// each of the four quadrants, with the corner at the matching extent and the matching association.
+TEST(AnalyzePolygonMeasurement, FacingSelectsEgoSideCorner)
+{
+  const auto cluster = makePolyCluster({{8, -1}, {12, -1}, {12, 1}, {8, 1}});
+  const auto pred = makeBox(10.0, 0.0, 0.0, 4.0, 2.0);
+
+  const auto rear_right = shapes::analyzePolygonMeasurement(cluster, makeEgo(0.0, -10.0), pred);
+  EXPECT_NEAR(rear_right.corner.x, 8.0, 1e-6);
+  EXPECT_NEAR(rear_right.corner.y, -1.0, 1e-6);
+  EXPECT_FALSE(rear_right.is_front);
+  EXPECT_DOUBLE_EQ(rear_right.s_lat, -1.0);
+
+  const auto front_right = shapes::analyzePolygonMeasurement(cluster, makeEgo(20.0, -10.0), pred);
+  EXPECT_NEAR(front_right.corner.x, 12.0, 1e-6);
+  EXPECT_NEAR(front_right.corner.y, -1.0, 1e-6);
+  EXPECT_TRUE(front_right.is_front);
+  EXPECT_DOUBLE_EQ(front_right.s_lat, -1.0);
+
+  const auto front_left = shapes::analyzePolygonMeasurement(cluster, makeEgo(20.0, 10.0), pred);
+  EXPECT_NEAR(front_left.corner.x, 12.0, 1e-6);
+  EXPECT_NEAR(front_left.corner.y, 1.0, 1e-6);
+  EXPECT_TRUE(front_left.is_front);
+  EXPECT_DOUBLE_EQ(front_left.s_lat, 1.0);
+
+  const auto rear_left = shapes::analyzePolygonMeasurement(cluster, makeEgo(0.0, 10.0), pred);
+  EXPECT_NEAR(rear_left.corner.x, 8.0, 1e-6);
+  EXPECT_NEAR(rear_left.corner.y, 1.0, 1e-6);
+  EXPECT_FALSE(rear_left.is_front);
+  EXPECT_DOUBLE_EQ(rear_left.s_lat, 1.0);
+}
+
+// A rounded body (12-gon) is no longer rejected as "not a corner": the prior asserts a box, so we
+// report its ego-facing bounding corner. The EKF innovation gate, not a shape classifier, is what
+// guards against a genuinely bad cluster.
+TEST(AnalyzePolygonMeasurement, RoundedBodyStillYieldsBoundingCorner)
 {
   std::vector<std::pair<double, double>> pts;
   for (int i = 0; i < 12; ++i) {
@@ -194,7 +220,9 @@ TEST(AnalyzePolygonMeasurement, RoundedBodyHasNoCorner)
   const auto pred = makeBox(10.0, 0.0, 0.0, 4.0, 2.0);
   const auto m = shapes::analyzePolygonMeasurement(cluster, makeEgo(0.0, -10.0), pred);
 
-  EXPECT_FALSE(m.has_corner);
+  ASSERT_TRUE(m.has_corner);
+  EXPECT_NEAR(m.corner.x, 8.5, 1e-6);   // min-x extent of the blob
+  EXPECT_NEAR(m.corner.y, -1.5, 1e-6);  // min-y extent of the blob
 }
 
 // --- updateStatePoseCorner -----------------------------------------------------------------------
@@ -263,69 +291,6 @@ TEST(UpdateStatePoseCorner, GatesOutGrossOutlier)
   ASSERT_TRUE(model.getPredictedState(t, pose1, c1, tw1, c1));
   EXPECT_NEAR(pose1.position.x, pose0.position.x, 1e-9);  // state untouched
   EXPECT_NEAR(pose1.position.y, pose0.position.y, 1e-9);
-}
-
-// --- associateCornerToPrediction ---------------------------------------------------------------
-
-// Each observed corner is associated to the predicted box quadrant it falls in: front/rear from the
-// longitudinal sign, left/right (s_lat) from the lateral sign. Box at (10,0), yaw 0, 4 x 2.
-TEST(AssociateCornerToPrediction, ResolvesQuadrant)
-{
-  const auto pred = makeBox(10.0, 0.0, 0.0, 4.0, 2.0);
-
-  const auto front_left = associateCornerToPrediction(makePoint(12.0, 1.0), pred);
-  EXPECT_TRUE(front_left.is_front);
-  EXPECT_DOUBLE_EQ(front_left.s_lat, 1.0);
-
-  const auto front_right = associateCornerToPrediction(makePoint(12.0, -1.0), pred);
-  EXPECT_TRUE(front_right.is_front);
-  EXPECT_DOUBLE_EQ(front_right.s_lat, -1.0);
-
-  const auto rear_left = associateCornerToPrediction(makePoint(8.0, 1.0), pred);
-  EXPECT_FALSE(rear_left.is_front);
-  EXPECT_DOUBLE_EQ(rear_left.s_lat, 1.0);
-
-  const auto rear_right = associateCornerToPrediction(makePoint(8.0, -1.0), pred);
-  EXPECT_FALSE(rear_right.is_front);
-  EXPECT_DOUBLE_EQ(rear_right.s_lat, -1.0);
-}
-
-// Association respects the predicted yaw: with the body rotated 90 deg, the longitudinal axis is
-// +y, so a corner displaced in +y is "front" and one in +x (the body's right) is rear-right.
-TEST(AssociateCornerToPrediction, UsesPredictedYaw)
-{
-  const auto pred = makeBox(0.0, 0.0, M_PI_2, 4.0, 2.0);
-
-  const auto a = associateCornerToPrediction(makePoint(0.5, 3.0), pred);
-  EXPECT_TRUE(a.is_front);  // +y is forward when yaw = 90 deg
-
-  // Body lateral axis n = (-sin, cos) = (-1, 0); a +x displacement projects onto n as negative.
-  const auto b = associateCornerToPrediction(makePoint(0.5, -3.0), pred);
-  EXPECT_FALSE(b.is_front);
-  EXPECT_DOUBLE_EQ(b.s_lat, -1.0);
-}
-
-// --- one-sided (grow-only) dimension filter ----------------------------------------------------
-
-// growWidth is a lower-bound filter: a wider observation grows the tracked width (capped at the
-// size limit), a narrower one never shrinks it, and a non-positive observation is a no-op.
-TEST(VehicleShapeModelGrowWidth, GrowsOnlyAndClamps)
-{
-  VehicleShapeModel shape_model(object_model::normal_vehicle);
-  shape_model.init(makeBox(0.0, 0.0, 0.0, 4.0, 2.0));  // width seeded at 2.0
-  ASSERT_DOUBLE_EQ(shape_model.getWidth(), 2.0);
-
-  shape_model.growWidth(3.0);  // wider -> grows
-  EXPECT_DOUBLE_EQ(shape_model.getWidth(), 3.0);
-
-  shape_model.growWidth(1.5);  // narrower -> held
-  EXPECT_DOUBLE_EQ(shape_model.getWidth(), 3.0);
-
-  shape_model.growWidth(100.0);  // beyond the limit -> capped at width_max (5.0 for NormalVehicle)
-  EXPECT_DOUBLE_EQ(shape_model.getWidth(), 5.0);
-
-  shape_model.growWidth(0.0);  // non-positive -> no-op
-  EXPECT_DOUBLE_EQ(shape_model.getWidth(), 5.0);
 }
 
 }  // namespace autoware::multi_object_tracker

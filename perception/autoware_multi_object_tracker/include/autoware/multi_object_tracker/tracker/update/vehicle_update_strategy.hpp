@@ -21,23 +21,6 @@
 namespace autoware::multi_object_tracker
 {
 
-// Discrete front/rear and left/right association of an observed near corner to the predicted body.
-// Drives BicycleMotionModel::updateStatePoseCorner: `is_front` selects the front/rear endpoint
-// blend, `s_lat` (+1 / -1) the lateral half-width sign. This is the ONLY place the prior pose
-// enters the corner update — as a discrete choice, never as a mean injection (see
-// PolygonMeasurement).
-struct CornerAssociation
-{
-  bool is_front = false;
-  double s_lat = 1.0;  // +1 / -1: which side of the body axis the corner sits on
-};
-
-// Associate an observed near corner (map frame) to the nearest predicted bounding-box corner. The
-// box corner is picked purely by the sign of the corner's longitudinal / lateral offset from the
-// predicted center, so the result is the front/rear + left/right quadrant the corner falls in.
-CornerAssociation associateCornerToPrediction(
-  const geometry_msgs::msg::Point & corner, const types::DynamicObject & prediction);
-
 // Blends measurement position/orientation into pred using a distance-weighted scheme.
 // When enlarge_covariance=true, inflates pose/velocity covariances for the weak-update path.
 void createPseudoMeasurement(

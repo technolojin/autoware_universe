@@ -97,13 +97,6 @@ void VehicleShapeModel::updateHeight(double z_measurement)
     std::clamp(height_, object_model_.size_limit.height_min, object_model_.size_limit.height_max);
 }
 
-void VehicleShapeModel::growWidth(double visible_width)
-{
-  if (visible_width <= 0.0) return;
-  const double capped = std::min(visible_width, object_model_.size_limit.width_max);
-  if (capped > width_) width_ = capped;
-}
-
 std::optional<double> VehicleShapeModel::setShape(
   const autoware_perception_msgs::msg::Shape & shape, const rclcpp::Time & latest_measurement_time)
 {

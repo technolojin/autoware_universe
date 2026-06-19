@@ -281,9 +281,10 @@ bool VehicleTracker::conditionedUpdate(
   const autoware_perception_msgs::msg::Shape & tracker_shape, const rclcpp::Time & measurement_time,
   const types::InputChannel & channel_info)
 {
-  // Observation-only corner measurement from the raw cluster polygon, decoupled from the filter.
-  // Requires the ego position to resolve which surfaces are visible; without it (or without two
-  // statistically distinct ego-facing faces) we fall back to the weak blended update.
+  // Prior-driven corner measurement from the raw cluster polygon, decoupled from the filter. The
+  // prediction supplies the box orientation and (with ego) which corner faces the sensor; the
+  // cluster measures where that corner sits. Requires the ego position; without it (or when no
+  // ego-facing surface is resolvable) we fall back to the weak blended update.
   shapes::PolygonMeasurement meas;
   if (
     ego_pos_ && measurement.shape.type == autoware_perception_msgs::msg::Shape::POLYGON &&
@@ -293,33 +294,34 @@ bool VehicleTracker::conditionedUpdate(
 
   bool corner_updated = false;
   if (meas.has_corner) {
-    // Associate the observed corner to the nearest predicted box corner -> front/rear + lateral
-    // sign. This discrete choice is the ONLY place the prior pose enters the corner update.
-    const CornerAssociation assoc = associateCornerToPrediction(meas.corner, prediction);
-
-    // Gated EKF corner update. The corner mean and covariance are observation-only; the prior width
-    // rides only in the predicted measurement (see BicycleMotionModel::updateStatePoseCorner). A
-    // gross innovation (mis-association / merged cluster) is gated out and returns false.
+    // Gated EKF corner update. The corner mean and covariance are observation-only; the front/rear
+    // + lateral association (meas.is_front / meas.s_lat) and the prior width are the only prior
+    // inputs, and the width rides only in the predicted measurement (see
+    // BicycleMotionModel::updateStatePoseCorner). A gross innovation (mis-association / merged
+    // cluster) is gated out and returns false.
     const double prior_width = shape_model_.getWidth();
     const double length_before = motion_model_.getLength();
     corner_updated = motion_model_.updateStatePoseCorner(
-      meas.corner.x, meas.corner.y, meas.corner_cov, assoc.is_front, assoc.s_lat, prior_width);
+      meas.corner.x, meas.corner.y, meas.corner_cov, meas.is_front, meas.s_lat, prior_width);
 
     if (corner_updated) {
       motion_model_.limitStates();
 
-      // One-sided (grow-only) dimension filter. Occlusion only ever shortens what is observed, so a
-      // directly observed extent is a LOWER bound on the true size: it may grow a tracked dimension
-      // but never shrink it. The grown length is pinned back onto the wheelbase at the observed end
-      // (growth extends the occluded far end), so the position EKF never owns the length.
+      // One-sided (grow-only) LENGTH filter. Occlusion only ever shortens what is observed, so a
+      // directly observed extent is a LOWER bound on the true length: it may grow the tracked
+      // length but never shrink it. The grown length is pinned back onto the wheelbase at the
+      // observed end (growth extends the occluded far end), so the position EKF never owns the
+      // length. WIDTH is intentionally NOT touched here: the corner update consumes the prior width
+      // as the lateral half-width offset, so growing it from a (possibly diagonal / over-merged)
+      // polygon would offset the axles and destabilize the EKF. Width comes only from the bbox
+      // detector (setObjectShape).
       double target_length = length_before;
       if (meas.visible_length > target_length) {
         target_length = std::min(meas.visible_length, object_model_.size_limit.length_max);
       }
-      const auto length_anchor = assoc.is_front ? BicycleMotionModel::LengthUpdateAnchor::FRONT
-                                                : BicycleMotionModel::LengthUpdateAnchor::REAR;
+      const auto length_anchor = meas.is_front ? BicycleMotionModel::LengthUpdateAnchor::FRONT
+                                               : BicycleMotionModel::LengthUpdateAnchor::REAR;
       motion_model_.updateStateLength(target_length, length_anchor);
-      shape_model_.growWidth(meas.visible_width);
 
       // The corner EKF only touches x/y; z position and height come from the real measurement.
       constexpr double z_gain = 0.4;

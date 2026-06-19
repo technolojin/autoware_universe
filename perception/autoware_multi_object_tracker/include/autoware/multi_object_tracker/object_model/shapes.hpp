@@ -50,47 +50,59 @@ bool convertConvexHullToBoundingBox(
 std::optional<types::DynamicObject> alignClusterToOrientation(
   const types::DynamicObject & cluster, double target_yaw);
 
-// Observation-only polygon measurement for the corner-based vehicle update. Every field is a pure
-// function of the cluster footprint and the sensor geometry — NO prior (tracked center / yaw /
-// width / length) enters the mean OR the covariance. The prior is consumed strictly downstream as
-// (a) a discrete face association and (b) the linear measurement model inside the EKF, never
-// injected here. Keeping the mean observation-only and the covariance derived from the measured
-// point geometry (not from agreement with the prediction) is what prevents a self-confirming
-// measurement -> EKF -> measurement feedback loop, and lets genuine misalignment (motion lag,
-// shape change, mis-clustering) surface as an honest innovation instead of being masked.
+// Prior-driven corner measurement for the corner-based vehicle update.
+//
+// CONCEPT (the deliberate departure from "detect a corner in the cluster"): a tracked vehicle is a
+// box with four corners. We do NOT try to classify whether the cluster shape "contains a corner" —
+// real LiDAR clusters are not deterministic (rounded bumpers, sparse/occluded returns, mirrors,
+// varying bend angles), so any shape-only "is this an L-corner?" test is unwinnable. Instead the
+// PREDICTION asserts the box orientation and, with ego, which corner faces the sensor; the CLUSTER
+// only measures WHERE that corner sits. The measured corner is the cluster's extreme point on the
+// ego-facing longitudinal and lateral sides, read in the predicted-yaw box frame.
+//
+// Anti-feedback discipline (relaxed but bounded): the corner position is a pure function of the
+// cluster points and the prior ORIENTATION only — the prior position / width / length never enter
+// the mean. Borrowing the prior orientation to define the readout frame is the same linearization
+// the EKF already performs at the predicted yaw; the corner constraint still pulls a drifted yaw
+// back across frames. The covariance is observation-derived (per-face point support), never shrunk
+// by agreement with the prediction, so genuine misalignment surfaces as an honest innovation.
 struct PolygonMeasurement
 {
-  // Near corner = intersection of the two fitted visible faces (rounding-immune: it is the meeting
-  // point of the two surface lines, not a sampled vertex). Map frame. has_corner is true only when
-  // two statistically distinct ego-facing faces are resolved.
+  // Visible corner = the cluster's extreme point on the ego-facing longitudinal and lateral sides,
+  // expressed in the predicted-yaw box frame and mapped back to the map frame. Rounding-immune: it
+  // is an extent intersection, not a sampled apex. has_corner is true whenever at least one ego-
+  // facing surface is resolved (the unobserved axis is handled by a large covariance below).
   bool has_corner = false;
   geometry_msgs::msg::Point corner;
-  // 2x2 position covariance of `corner` [m^2], row-major {xx, xy, yx, yy}, propagated from the two
-  // line fits. Naturally anisotropic: large along the ill-determined axis as the two faces approach
-  // parallel, so the EKF only corrects the well-observed degrees of freedom.
+  // 2x2 position covariance of `corner` [m^2], row-major {xx, xy, yx, yy}. Anisotropic by
+  // construction: tight along an axis a real face resolves, large along an axis with no supporting
+  // face (a single visible face leaves the corner nearly unconstrained perpendicular to it), so the
+  // EKF only corrects the well-observed degrees of freedom and yaw becomes observable from the
+  // well-localized side.
   std::array<double, 4> corner_cov{};
 
-  // Heading cue from the longer visible face tangent (direction only — never a length). yaw_var is
-  // continuous, from the point noise and the edge spread, so short / poorly supported edges
-  // naturally carry near-zero weight. Resolved against the predicted axis only for the 180-deg
-  // branch (a discrete choice, not a mean injection).
-  bool has_yaw = false;
-  double yaw = 0.0;
-  double yaw_var = std::numeric_limits<double>::max();
+  // Which predicted box corner the measurement is associated to, derived from the ego-facing side
+  // (a discrete prior-driven choice, not a mean injection). Consumed directly by
+  // BicycleMotionModel::updateStatePoseCorner — is_front selects the front/rear endpoint blend,
+  // s_lat (+1 / -1) the lateral half-width sign.
+  bool is_front = false;
+  double s_lat = 1.0;
 
-  // One-sided lower bounds on the body dimensions from directly observed surface (occlusion only
-  // ever shortens what is seen). For the separate dimension filter; must never shrink a tracked
-  // dimension. Decoupled from the position measurement above.
+  // One-sided lower bound on the body LENGTH from directly observed surface (occlusion only ever
+  // shortens what is seen). For the separate grow-only length filter; must never shrink the tracked
+  // length. Decoupled from the position measurement above. WIDTH is deliberately NOT reported: the
+  // tracked width comes only from the bbox detector, never from a polygon cluster (a diagonal /
+  // over-merged cluster would otherwise inflate width and offset the axles via the corner update's
+  // lateral half-width term, destabilizing the EKF).
   double visible_length = 0.0;
-  double visible_width = 0.0;
 };
 
-// Observation-only corner / orientation extraction for the vehicle update (see PolygonMeasurement).
+// Prior-driven corner / extent extraction for the vehicle update (see PolygonMeasurement).
 // `cluster` is a POLYGON DynamicObject (footprint in cluster-local frame, pose in map frame);
-// `ego_pos` is the sensor/ego position in map frame (resolves which faces are visible);
-// `prediction` is used ONLY to disambiguate the 180-deg yaw branch — never to build a mean or a
-// covariance. Returns has_corner=false when fewer than two statistically distinct ego-facing faces
-// are present.
+// `ego_pos` is the sensor/ego position in map frame (resolves which corner is visible);
+// `prediction` supplies the box orientation that defines the readout frame and, with ego, the
+// front/rear + left/right association — never a mean or a covariance. Returns has_corner=false only
+// for a non-polygon / degenerate cluster or when no ego-facing surface is resolvable.
 PolygonMeasurement analyzePolygonMeasurement(
   const types::DynamicObject & cluster, const geometry_msgs::msg::Point & ego_pos,
   const types::DynamicObject & prediction);
