@@ -274,15 +274,12 @@ bool BicycleMotionModel::updateStatePoseRear(
   // check if the state is initialized
   if (!checkInitialized()) return false;
 
-  // Measure the observed rear FACE center directly. The face center lies on the body axis at a
-  // distance gamma_rear * wheel_base behind the rear axle. Because that offset is gamma_rear * L *
-  // u_hat and L * u_hat == (p2 - p1) by definition of the two-point state, the wheelbase and yaw
-  // cancel and the measurement is an EXACT linear function of the endpoints (true KF, no EKF
-  // approximation):
-  //   face_rear = p1 - gamma_rear * (p2 - p1) = (1 + gamma_rear) * p1 - gamma_rear * p2
-  // The innovation equals the old single-axle form, but C now constrains a linear blend of both
-  // endpoints, so the gain splits the correction between translation and rotation per the prior
-  // covariance instead of dumping it on the rear axle (which rotated the body as a side effect).
+  // Measure the observed rear FACE center directly. The face sits gamma_rear * wheel_base behind the
+  // rear axle; since that offset is gamma_rear * (p2 - p1), wheelbase and yaw cancel and the
+  // measurement is an EXACT linear function of the endpoints (true KF, no EKF approximation):
+  //   face_rear = (1 + gamma_rear) * p1 - gamma_rear * p2
+  // C constrains a blend of both endpoints, so the gain splits the correction between translation
+  // and rotation per the prior covariance instead of dumping it on the rear axle.
   const double g = motion_params_.wheel_gamma_rear;
   constexpr int DIM_Y = 2;
   Eigen::Matrix<double, DIM_Y, 1> Y;
@@ -584,12 +581,10 @@ bool BicycleMotionModel::predictStateStep(const double dt, KalmanFilter & ekf) c
 
   // Process noise covariance Q
   //
-  // Yaw-rate (heading) process noise obeys the nonholonomic constraint: a vehicle cannot change
-  // heading without translating (w = vel_long * tan(steer) / wheel_base), so the yaw-rate
-  // uncertainty must vanish as vel_long -> 0. A stationary vehicle is physically incapable of
-  // turning, hence NO heading noise may be injected at standstill. Injecting a constant floor there
-  // ratchets up the front-point lateral variance (the heading noise feeds q_cov_lat2 -> Q on
-  // X2/Y2 only), which a rear/front partial update cannot pull back -> standstill yaw jitter.
+  // Yaw-rate (heading) process noise obeys the nonholonomic constraint (w = vel_long * tan(steer) /
+  // wheel_base): it must vanish as vel_long -> 0. A constant floor injected at standstill ratchets up
+  // the front-point lateral variance (heading noise feeds q_cov_lat2 -> Q on X2/Y2 only) that a
+  // partial update cannot pull back -> standstill yaw jitter; so ramp the floor in with speed below.
   const double vel_long_abs = std::abs(vel_long);
   constexpr double vel_long_eps = 1e-3;  // [m/s] guard against division by zero
   /* physical yaw-rate bound, limited by the tighter of the two:
@@ -599,10 +594,8 @@ bool BicycleMotionModel::predictStateStep(const double dt, KalmanFilter & ekf) c
   const double q_stddev_yaw_rate_phys = std::min(
     motion_params_.q_stddev_acc_lat / std::max(vel_long_abs, vel_long_eps),
     vel_long_abs * std::sin(motion_params_.q_max_slip_angle) / wheel_base);  // [rad/s]
-  // Ramp the configured floor in with speed instead of applying it unconditionally, so the floor
-  // -> 0 at standstill (no heading information exists to be tracked) and only reaches its full
-  // value once the vehicle is clearly moving. Above vel_ref this reproduces the original clamp
-  // behavior.
+  // Ramp the floor in with speed: 0 at standstill, full value at vel_ref and above (where it
+  // reproduces the original clamp).
   constexpr double vel_ref = 1.0;  // [m/s] speed at which the yaw-rate floor reaches full value
   const double yaw_rate_floor =
     motion_params_.q_stddev_yaw_rate_min * std::clamp(vel_long_abs / vel_ref, 0.0, 1.0);

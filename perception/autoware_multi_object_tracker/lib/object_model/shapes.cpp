@@ -355,12 +355,8 @@ std::optional<types::DynamicObject> alignClusterToOrientation(
 
 namespace
 {
-// --- helpers for analyzePolygonMeasurement -------------------------------------------------------
-//
-// Parameter-light by design. The corner POSITION is a pure function of the cluster points and the
-// predicted orientation (an extent readout, not a fit); only the COVARIANCE depends on a couple of
-// physical, scale-fixed constants below. There is no shape classification — the prior asserts the
-// box, the cluster measures the corner, and bad measurements are left to the EKF innovation gate.
+// --- helpers for analyzePolygonMeasurement (see PolygonMeasurement in shapes.hpp) ----------------
+// The corner position is a pure extent readout; only the covariance depends on the constants below.
 
 struct Vec2
 {
@@ -473,14 +469,11 @@ PolygonMeasurement analyzePolygonMeasurement(
   // No ego-facing surface resolved at all -> no usable corner; caller takes the weak/blended path.
   if (!lon_face && !lat_face) return m;
 
-  // Per-axis corner-position variance. The corner is read as the cluster EXTREME on each axis (a
-  // max/min projection), NOT the mean of a fitted plane, so its uncertainty does NOT shrink as
-  // s2/N: an extreme is biased outward, dominated by the single worst point, and the clustering
-  // jitter / occlusion-boundary scatter does not average away. We therefore set the variance of a
-  // resolved face to the single-point scatter (independent of the support count) rather than the
-  // mean-of-N variance s2/N. (The old s2/N collapsed R to ~cm on a well-sampled face and drove the
-  // EKF to chase per-frame extreme jitter, injecting it into position and, via the wheelbase lever,
-  // into yaw.)
+  // Per-axis corner-position variance. The corner is an EXTREME (max/min projection), not a plane
+  // fit, so its uncertainty does NOT shrink as s2/N: it is biased outward and dominated by the
+  // single worst point. Use the single-point scatter for a resolved face, independent of support
+  // count, so the EKF does not chase per-frame extreme jitter (which the wheelbase lever feeds into
+  // yaw).
   const double s2 = LIDAR_POINT_STD * LIDAR_POINT_STD;
   const double var_u = lon_face ? s2 : UNOBSERVED_VAR;
   const double var_n = lat_face ? s2 : UNOBSERVED_VAR;

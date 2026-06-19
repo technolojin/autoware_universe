@@ -301,13 +301,10 @@ bool VehicleTracker::applyCornerUpdate(
   pose_cov[XYZRPY_COV_IDX::Y_X] = meas.corner_cov[2];
   pose_cov[XYZRPY_COV_IDX::Y_Y] = meas.corner_cov[3];
 
-  // The face center is reconstructed by subtracting the PRIOR half-width along the lateral axis
-  // n, so any error in that prior width biases the reconstructed face center laterally, and the
-  // wheelbase lever amplifies a lateral bias into yaw. The corner_cov above only carries the point
-  // scatter, not this reconstruction error, so the EKF would otherwise treat the prior width as
-  // exact and chase the bias into yaw. Inject the width uncertainty as extra lateral variance
-  // (var_lat * n n^T) so the EKF de-weights the lateral (yaw-driving) channel accordingly. This
-  // is the covariance-side replacement for the old correctWheelAnchorLateral() dead-zone.
+  // The face center subtracts the PRIOR half-width along n, so an error in that prior width biases
+  // it laterally, and the wheelbase lever turns a lateral bias into yaw. corner_cov carries only the
+  // point scatter, not this reconstruction error, so inject the width uncertainty as extra lateral
+  // variance (var_lat * n n^T) to de-weight the yaw-driving channel.
   {
     constexpr double WIDTH_REL_STD = 0.25;  // 1-sigma relative uncertainty of the prior width
     const double width_std = WIDTH_REL_STD * half_w;  // std of the s_lat * half_w lateral offset
@@ -327,14 +324,11 @@ bool VehicleTracker::applyCornerUpdate(
 
   motion_model_.limitStates();
 
-  // One-sided (grow-only) LENGTH filter. Occlusion only ever shortens what is observed, so a
-  // directly observed extent is a LOWER bound on the true length: it may grow the tracked length
-  // but never shrink it. The grown length is pinned back onto the wheelbase at the observed end
-  // (growth extends the occluded far end), so the position EKF never owns the length. WIDTH is
-  // intentionally NOT touched here: the corner reconstruction consumes the prior width as the
-  // lateral half-width offset, so growing it from a (possibly diagonal / over-merged) polygon would
-  // offset the axles and destabilize the EKF. Width comes only from the bbox detector
-  // (setObjectShape).
+  // One-sided (grow-only) LENGTH filter: occlusion only shortens what is seen, so the observed
+  // extent is a LOWER bound — it may grow the tracked length but never shrink it, pinned to the
+  // wheelbase at the observed end (growth extends the occluded far end), so the EKF never owns the
+  // length. WIDTH is NOT touched (the corner reconstruction consumes the prior width); width comes
+  // only from the bbox detector (setObjectShape).
   double target_length = length_before;
   if (meas.visible_length > target_length) {
     target_length = std::min(meas.visible_length, object_model_.size_limit.length_max);
