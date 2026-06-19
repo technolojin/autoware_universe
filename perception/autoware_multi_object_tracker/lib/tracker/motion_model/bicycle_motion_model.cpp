@@ -310,6 +310,58 @@ bool BicycleMotionModel::updateStatePoseFront(
   return ekf_.update(Y, C, R);
 }
 
+bool BicycleMotionModel::updateStatePoseCorner(
+  const double & cx, const double & cy, const std::array<double, 4> & corner_cov,
+  const bool is_front, const double s_lat, const double width)
+{
+  // check if the state is initialized
+  if (!checkInitialized()) return false;
+
+  // The corner is the same endpoint blend as the face center plus a lateral half-width offset. With
+  // the lateral normal n frozen at the predicted yaw, the offset s_lat * (W/2) * n is a constant,
+  // so C stays a constant linear map (front: (1+g)*p2 - g*p1; rear: (1+g)*p1 - g*p2) and the prior
+  // width rides ONLY in the predicted measurement y_pred = C * x + offset. The innovation
+  // y - y_pred = observed_corner - predicted_corner is therefore free of prior injection: a stale
+  // width or a real shape change shows up honestly and is corrected at the Kalman-gain rate.
+  const double g = is_front ? motion_params_.wheel_gamma_front : motion_params_.wheel_gamma_rear;
+  constexpr int DIM_Y = 2;
+
+  Eigen::Matrix<double, DIM_Y, DIM> C = Eigen::Matrix<double, DIM_Y, DIM>::Zero();
+  if (is_front) {
+    C(0, IDX::X2) = 1.0 + g;
+    C(0, IDX::X1) = -g;
+    C(1, IDX::Y2) = 1.0 + g;
+    C(1, IDX::Y1) = -g;
+  } else {
+    C(0, IDX::X1) = 1.0 + g;
+    C(0, IDX::X2) = -g;
+    C(1, IDX::Y1) = 1.0 + g;
+    C(1, IDX::Y2) = -g;
+  }
+
+  // Predicted corner = C*x + offset, with offset = s_lat * (W/2) * n the constant lateral
+  // half-width term (n frozen at the predicted yaw). The EKF innovation is observed_corner -
+  // predicted_corner; since the linear update computes (y - C*x) internally, we pass y =
+  // observed_corner - offset so the innovation equals observed_corner - (C*x + offset). This
+  // SUBTRACTS the model's constant (the prior half-width) to form the residual — it does not inject
+  // the prior into the measurement value or into R, so the path stays free of self-confirmation.
+  const double yaw = getYawState();
+  const double half_w = 0.5 * width;
+  const double off_x = s_lat * half_w * (-std::sin(yaw));  // n = (-sin yaw, cos yaw)
+  const double off_y = s_lat * half_w * (std::cos(yaw));
+
+  Eigen::Matrix<double, DIM_Y, 1> Y;
+  Y << cx - off_x, cy - off_y;
+
+  Eigen::Matrix<double, DIM_Y, DIM_Y> R;
+  R(0, 0) = corner_cov[0];
+  R(0, 1) = corner_cov[1];
+  R(1, 0) = corner_cov[2];
+  R(1, 1) = corner_cov[3];
+
+  return ekf_.update(Y, C, R);
+}
+
 bool BicycleMotionModel::updateStateLength(
   const double & new_length, const LengthUpdateAnchor anchor)
 {

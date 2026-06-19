@@ -552,7 +552,8 @@ PolygonGeometry analyzePolygonGeometry(
     cx /= static_cast<double>(run.size());
     cy /= static_cast<double>(run.size());
     const double cd = std::cos(lf.dir), sd = std::sin(lf.dir);
-    double min_a = std::numeric_limits<double>::max(), max_a = std::numeric_limits<double>::lowest();
+    double min_a = std::numeric_limits<double>::max(),
+           max_a = std::numeric_limits<double>::lowest();
     for (const auto & v : run) {
       const double a = (v.x - cx) * cd + (v.y - cy) * sd;
       min_a = std::min(min_a, a);
@@ -693,6 +694,248 @@ PolygonGeometry analyzePolygonGeometry(
   g.trust = std::clamp((0.5 + 0.5 * straightness) * inflation_penalty, 0.0, 1.0);
 
   return g;
+}
+
+namespace
+{
+// --- helpers for analyzePolygonMeasurement -------------------------------------------------------
+//
+// The whole analyzer is parameter-light by design: the geometry (corner position, yaw, extents) is
+// a pure function of the measured points, and only the COVARIANCE magnitude depends on a single
+// sensor constant below. There are no scene-tuned thresholds — the distinct-faces decision is a
+// statistical significance test, and bad measurements are left for the EKF innovation gate.
+
+constexpr double LIDAR_POINT_STD = 0.10;  // [m] lateral scatter of a cluster point about the true
+                                          // surface (sensor range noise + clustering jitter). The
+                                          // ONE physical knob: it scales the measurement covariance
+                                          // and sets the flatness floor below; corner/yaw means are
+                                          // independent of it.
+constexpr double FACE_K_SIGMA = 3.0;  // two faces are "distinct" when their directions differ by
+                                      // more than this many combined sigma (universal, not tuned)
+constexpr double FACE_MAX_CURVATURE =
+  0.06;  // [-] max RMS-residual / arm-length for a run to count as a flat face. Dimensionless and
+         // scale-free: a straight surface (even with a rounded join) stays well below it while a
+         // curved arc exceeds it, so a rounded BODY never poses as a two-face corner.
+
+// Total-least-squares fit of a single face, carrying the uncertainty needed to propagate a corner
+// covariance. dir_var is the variance of the fitted direction: rotating the far end of a span by
+// dtheta moves a point at along-distance l perpendicular by l*dtheta, so the angular error std is
+// (per-point perpendicular noise) / sqrt(Sum l^2).
+struct FaceFit
+{
+  Vec2 centroid{};
+  double dir = 0.0;         // principal direction [rad]
+  double sigma_perp = 0.0;  // RMS perpendicular residual [m]
+  double dir_var = 0.0;     // variance of dir [rad^2]
+  double length = 0.0;      // extent along dir [m]
+  size_t n = 0;
+  bool valid = false;
+};
+
+FaceFit fitFace(const std::vector<Vec2> & pts)
+{
+  FaceFit f;
+  const size_t n = pts.size();
+  if (n < 2) return f;
+  double cx = 0.0, cy = 0.0;
+  for (const auto & p : pts) {
+    cx += p.x;
+    cy += p.y;
+  }
+  cx /= static_cast<double>(n);
+  cy /= static_cast<double>(n);
+  double sxx = 0.0, syy = 0.0, sxy = 0.0;
+  for (const auto & p : pts) {
+    const double dx = p.x - cx, dy = p.y - cy;
+    sxx += dx * dx;
+    syy += dy * dy;
+    sxy += dx * dy;
+  }
+  f.dir = 0.5 * std::atan2(2.0 * sxy, sxx - syy);
+  const double cd = std::cos(f.dir), sd = std::sin(f.dir);
+  double sq_perp = 0.0, sum_along2 = 0.0;
+  double min_a = std::numeric_limits<double>::max(), max_a = std::numeric_limits<double>::lowest();
+  for (const auto & p : pts) {
+    const double dx = p.x - cx, dy = p.y - cy;
+    const double along = dx * cd + dy * sd;
+    const double perp = -dx * sd + dy * cd;
+    sq_perp += perp * perp;
+    sum_along2 += along * along;
+    min_a = std::min(min_a, along);
+    max_a = std::max(max_a, along);
+  }
+  f.centroid = {cx, cy};
+  f.n = n;
+  f.length = max_a - min_a;
+  f.sigma_perp = std::sqrt(sq_perp / static_cast<double>(n));
+  // Floor the per-point perpendicular noise at the sensor std so a perfectly collinear arm (e.g.
+  // n = 2) still reports a finite, honest direction uncertainty rather than zero.
+  const double s_perp2 =
+    std::max(sq_perp / static_cast<double>(n), LIDAR_POINT_STD * LIDAR_POINT_STD);
+  f.dir_var = s_perp2 / std::max(sum_along2, 1e-6);
+  f.valid = true;
+  return f;
+}
+
+// Intersection of two lines given as (centroid, dir). Returns false when near-parallel.
+bool lineIntersect(const FaceFit & a, const FaceFit & b, Vec2 & out)
+{
+  const double c1 = std::cos(a.dir), s1 = std::sin(a.dir);
+  const double c2 = std::cos(b.dir), s2 = std::sin(b.dir);
+  const double denom = c1 * s2 - s1 * c2;  // cross product of the two direction unit vectors
+  if (std::abs(denom) < 1e-6) return false;
+  const double dx = b.centroid.x - a.centroid.x;
+  const double dy = b.centroid.y - a.centroid.y;
+  const double t = (dx * s2 - dy * c2) / denom;
+  out.x = a.centroid.x + t * c1;
+  out.y = a.centroid.y + t * s1;
+  return true;
+}
+
+// Corner covariance from the two face fits. Each face constrains the corner perpendicular to its
+// tangent with variance (line offset variance) + (lever along the face)^2 * (direction variance);
+// the lever term is why a corner far from a face's sampled span is less certain. Summing the two
+// rank-1 information contributions and inverting yields a 2x2 covariance that is well-conditioned
+// for perpendicular faces and grows along the ill-determined axis as the faces become parallel.
+std::array<double, 4> cornerCovariance(const FaceFit & a, const FaceFit & b, const Vec2 & corner)
+{
+  Eigen::Matrix2d info = Eigen::Matrix2d::Zero();
+  for (const FaceFit * f : {&a, &b}) {
+    const double cd = std::cos(f->dir), sd = std::sin(f->dir);
+    const double lever = (corner.x - f->centroid.x) * cd + (corner.y - f->centroid.y) * sd;
+    const double s_perp2 =
+      std::max(f->sigma_perp * f->sigma_perp, LIDAR_POINT_STD * LIDAR_POINT_STD);
+    const double offset_var = s_perp2 / static_cast<double>(f->n);
+    const double perp_var = offset_var + lever * lever * f->dir_var;
+    const Eigen::Vector2d nrm(-sd, cd);  // face normal
+    info += (1.0 / std::max(perp_var, 1e-9)) * (nrm * nrm.transpose());
+  }
+  const Eigen::Matrix2d cov = info.inverse();
+  return {cov(0, 0), cov(0, 1), cov(1, 0), cov(1, 1)};
+}
+}  // namespace
+
+PolygonMeasurement analyzePolygonMeasurement(
+  const types::DynamicObject & cluster, const geometry_msgs::msg::Point & ego_pos,
+  const types::DynamicObject & prediction)
+{
+  PolygonMeasurement m;
+
+  const auto & raw = cluster.shape.footprint.points;
+  if (cluster.shape.type != autoware_perception_msgs::msg::Shape::POLYGON || raw.size() < 3) {
+    return m;
+  }
+
+  std::vector<Vec2> pts = footprintToMap(cluster);
+  const size_t n = pts.size();
+  if (signedArea(pts) < 0.0) std::reverse(pts.begin(), pts.end());  // enforce CCW
+
+  // Ego-facing edge mask (same convention as analyzePolygonGeometry): for a CCW polygon the outward
+  // normal of edge (e_x,e_y) is (e_y,-e_x); the edge faces ego when it points toward ego.
+  std::vector<bool> facing(n, false);
+  for (size_t i = 0; i < n; ++i) {
+    const auto & p0 = pts[i];
+    const auto & p1 = pts[(i + 1) % n];
+    const double ex = p1.x - p0.x, ey = p1.y - p0.y;
+    const double mx = 0.5 * (p0.x + p1.x), my = 0.5 * (p0.y + p1.y);
+    facing[i] = (ey * (ego_pos.x - mx) - ex * (ego_pos.y - my)) > 0.0;
+  }
+
+  // Longest contiguous (cyclic) run of ego-facing edges. A fully ego-facing hull is degenerate.
+  bool all_facing = true;
+  for (size_t i = 0; i < n; ++i) {
+    if (!facing[i]) {
+      all_facing = false;
+      break;
+    }
+  }
+  if (all_facing) return m;
+  size_t break_edge = 0;
+  while (break_edge < n && facing[break_edge]) ++break_edge;
+  size_t best_start = 0, best_run = 0, cur_start = 0, cur_run = 0;
+  for (size_t step = 0; step < n; ++step) {
+    const size_t e = (break_edge + 1 + step) % n;  // start scanning just after a non-facing edge
+    if (facing[e]) {
+      if (cur_run == 0) cur_start = e;
+      ++cur_run;
+      if (cur_run > best_run) {
+        best_run = cur_run;
+        best_start = cur_start;
+      }
+    } else {
+      cur_run = 0;
+    }
+  }
+  if (best_run < 1) return m;
+
+  // Vertices spanned by the run (best_run edges -> best_run + 1 vertices).
+  std::vector<Vec2> run;
+  run.reserve(best_run + 1);
+  for (size_t t = 0; t <= best_run; ++t) run.push_back(pts[(best_start + t) % n]);
+
+  const double pred_yaw = tf2::getYaw(prediction.pose.orientation);
+  auto resolveBranch = [&](double dir) {
+    return (std::abs(normAngle(dir - pred_yaw)) > M_PI_2) ? normAngle(dir + M_PI) : dir;
+  };
+
+  // Split the run into two faces at the bend that minimizes the combined squared residual. `s` is
+  // the shared corner vertex, so each side keeps >= 2 vertices (a sharp L is the minimal 3-vertex
+  // run, s = 1). The best split is accepted as a corner only when the two face directions are
+  // statistically distinct (a real bend, not noise on one straight face) and the lines intersect.
+  FaceFit best_a, best_b;
+  bool have_corner = false;
+  if (run.size() >= 3) {
+    double best_sse = std::numeric_limits<double>::max();
+    for (size_t s = 1; s + 1 < run.size(); ++s) {
+      const std::vector<Vec2> side_a(run.begin(), run.begin() + s + 1);  // [0, s], shares vertex s
+      const std::vector<Vec2> side_b(run.begin() + s, run.end());        // [s, end]
+      const FaceFit fa = fitFace(side_a);
+      const FaceFit fb = fitFace(side_b);
+      if (!fa.valid || !fb.valid) continue;
+      const double sse = fa.sigma_perp * fa.sigma_perp * static_cast<double>(fa.n) +
+                         fb.sigma_perp * fb.sigma_perp * static_cast<double>(fb.n);
+      if (sse < best_sse) {
+        best_sse = sse;
+        best_a = fa;
+        best_b = fb;
+      }
+    }
+    if (best_a.valid && best_b.valid) {
+      const double dtheta = std::abs(normAngle(best_a.dir - best_b.dir));
+      const double sigma = std::sqrt(best_a.dir_var + best_b.dir_var);
+      // A genuine corner needs (1) two statistically distinct directions AND (2) both faces flat.
+      // The curvature gate is what separates a real bend from gentle curvature: an arc can be split
+      // into two arbitrarily distinct half-directions, but each half keeps a systematic residual
+      // proportional to its length (it bows), so it fails (2); a straight face does not.
+      const bool distinct = dtheta > FACE_K_SIGMA * sigma;
+      const bool flat = best_a.sigma_perp <= FACE_MAX_CURVATURE * best_a.length &&
+                        best_b.sigma_perp <= FACE_MAX_CURVATURE * best_b.length;
+      Vec2 corner;
+      if (distinct && flat && lineIntersect(best_a, best_b, corner)) {
+        m.has_corner = true;
+        m.corner.x = corner.x;
+        m.corner.y = corner.y;
+        m.corner.z = cluster.pose.position.z;
+        m.corner_cov = cornerCovariance(best_a, best_b, corner);
+        have_corner = true;
+      }
+    }
+  }
+
+  // Heading + visible extents. With a corner, the longer arm is the body-longitudinal cue; without
+  // one, a single straight run still yields a tangent (used as a weak heading hint only).
+  const FaceFit yaw_fit =
+    have_corner ? (best_a.length >= best_b.length ? best_a : best_b) : fitFace(run);
+  if (yaw_fit.valid && yaw_fit.length > 0.0) {
+    m.has_yaw = true;
+    m.yaw = resolveBranch(yaw_fit.dir);
+    m.yaw_var = yaw_fit.dir_var;
+    const auto ext = computeOrientedExtent(run, std::cos(m.yaw), std::sin(m.yaw));
+    m.visible_length = ext.max_along - ext.min_along;
+    m.visible_width = ext.max_lat - ext.min_lat;
+  }
+
+  return m;
 }
 
 std::pair<double, double> getObjectZRange(const types::DynamicObject & object)

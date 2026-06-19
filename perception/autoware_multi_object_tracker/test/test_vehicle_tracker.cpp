@@ -13,11 +13,16 @@
 // limitations under the License.
 
 #include "autoware/multi_object_tracker/object_model/shapes.hpp"
+#include "autoware/multi_object_tracker/tracker/motion_model/bicycle_motion_model.hpp"
 #include "autoware/multi_object_tracker/tracker/update/vehicle_update_strategy.hpp"
+
+#include <autoware_utils_geometry/msg/covariance.hpp>
 
 #include <gtest/gtest.h>
 
+#include <array>
 #include <cmath>
+#include <limits>
 #include <utility>
 #include <vector>
 
@@ -300,6 +305,136 @@ TEST(AnalyzePolygonGeometry, ThinSideFaceStaysWeak)
   EXPECT_FALSE(g.has_corner);
   EXPECT_FALSE(g.has_end_face);
   EXPECT_EQ(s.type, UpdateStrategyType::WEAK_UPDATE);
+}
+
+// --- analyzePolygonMeasurement (observation-only corner) ---------------------------------------
+
+namespace
+{
+double nearestVertexDist(const types::DynamicObject & cluster, double tx, double ty)
+{
+  double best = std::numeric_limits<double>::max();
+  for (const auto & p : cluster.shape.footprint.points) {
+    best = std::min(best, std::hypot(static_cast<double>(p.x) - tx, static_cast<double>(p.y) - ty));
+  }
+  return best;
+}
+}  // namespace
+
+// A clean L: the corner is the intersection of the two visible faces; here that coincides with the
+// sampled vertex (8, -1). Heading runs along the long (bottom) face.
+TEST(AnalyzePolygonMeasurement, LShapeCornerIsLineIntersection)
+{
+  const auto cluster = makePolyCluster({{8, -1}, {12, -1}, {12, 1}, {8, 1}});
+  const auto pred = makeBox(10.0, 0.0, 0.0, 4.0, 2.0);
+  const auto m = shapes::analyzePolygonMeasurement(cluster, makeEgo(0.0, -10.0), pred);
+
+  EXPECT_TRUE(m.has_corner);
+  EXPECT_NEAR(m.corner.x, 8.0, 1e-6);
+  EXPECT_NEAR(m.corner.y, -1.0, 1e-6);
+  EXPECT_TRUE(m.has_yaw);
+  EXPECT_NEAR(wrapToPi(m.yaw), 0.0, 0.05);
+  // Covariance is a valid 2x2 (PD): positive diagonal and positive determinant.
+  EXPECT_GT(m.corner_cov[0], 0.0);
+  EXPECT_GT(m.corner_cov[3], 0.0);
+  EXPECT_GT(m.corner_cov[0] * m.corner_cov[3] - m.corner_cov[1] * m.corner_cov[2], 0.0);
+}
+
+// Rounding-immunity: the true corner (8, -1) is cut away (no vertex sits there). The intersection
+// of the two fitted faces still lands on the true corner, whereas the closest SAMPLED vertex — what
+// the old nearest-point rule would have anchored on — is far off. This is the core fix.
+TEST(AnalyzePolygonMeasurement, RoundedCornerRecoversTrueCorner)
+{
+  // Long clean left face (x=8) and bottom face (y=-1); the (8,-1) corner is replaced by a chamfer.
+  const auto cluster = makePolyCluster({
+    {8.7, -1},
+    {9, -1},
+    {10, -1},
+    {11, -1},
+    {12, -1},  // bottom face (y = -1)
+    {12, 1},   // right (occluded)
+    {8, 1},
+    {8, 0.5},
+    {8, 0.0},
+    {8, -0.4},     // left face (x = 8)
+    {8.3, -0.75},  // chamfer (rounding) — no vertex at (8,-1)
+  });
+  const auto pred = makeBox(10.0, 0.0, 0.0, 4.0, 2.0);
+  const auto m = shapes::analyzePolygonMeasurement(cluster, makeEgo(0.0, -10.0), pred);
+
+  ASSERT_TRUE(m.has_corner);
+  // The recovered corner sits on the true corner well within the chamfer cut-out; the closest
+  // SAMPLED vertex (what the old nearest-point rule anchored on) is far further away. The residual
+  // bias here is the single synthetic chamfer point pulling one fit — real multi-point rounding
+  // averages out better. This contrast is the core fix: face intersection, not a vertex apex.
+  const double recovered_err = std::hypot(m.corner.x - 8.0, m.corner.y + 1.0);
+  EXPECT_LT(recovered_err, 0.25);
+  EXPECT_GT(nearestVertexDist(cluster, 8.0, -1.0), 0.35);
+  EXPECT_LT(recovered_err, nearestVertexDist(cluster, 8.0, -1.0));
+}
+
+// A single visible face (thin rear cluster, one face only) resolves no corner: has_corner=false.
+// The caller keeps the (separate) single-face / weak path; we do not fabricate a corner.
+TEST(AnalyzePolygonMeasurement, SingleFaceHasNoCorner)
+{
+  const auto cluster = makePolyCluster({{8, -1}, {8.2, -1}, {8.2, 1}, {8, 1}});
+  const auto pred = makeBox(10.0, 0.0, 0.0, 4.0, 2.0);
+  const auto m = shapes::analyzePolygonMeasurement(cluster, makeEgo(0.0, 0.0), pred);
+
+  EXPECT_FALSE(m.has_corner);
+}
+
+// A rounded body (12-gon, 30 deg turns) has no two statistically distinct faces: no corner.
+TEST(AnalyzePolygonMeasurement, RoundedBodyHasNoCorner)
+{
+  std::vector<std::pair<double, double>> pts;
+  for (int i = 0; i < 12; ++i) {
+    const double th = 2.0 * M_PI * static_cast<double>(i) / 12.0;
+    pts.push_back({10.0 + 1.5 * std::cos(th), 1.5 * std::sin(th)});
+  }
+  const auto cluster = makePolyCluster(pts);
+  const auto pred = makeBox(10.0, 0.0, 0.0, 4.0, 2.0);
+  const auto m = shapes::analyzePolygonMeasurement(cluster, makeEgo(0.0, -10.0), pred);
+
+  EXPECT_FALSE(m.has_corner);
+}
+
+// --- updateStatePoseCorner -----------------------------------------------------------------------
+
+// The corner measurement drives the EKF: an observed rear corner offset laterally from the
+// predicted rear corner pulls the body toward it (between prediction and observation, never past
+// it), with the prior width living only in the predicted measurement. Proves the observation-only
+// mean moves the filter without being pre-fused with the prior.
+TEST(UpdateStatePoseCorner, MovesEstimateTowardObservedCorner)
+{
+  BicycleMotionModel model;
+  const rclcpp::Time t(0, 0, RCL_ROS_TIME);
+  std::array<double, 36> pose_cov{};
+  using autoware_utils_geometry::xyzrpy_covariance_index::XYZRPY_COV_IDX;
+  pose_cov[XYZRPY_COV_IDX::X_X] = 1.0;
+  pose_cov[XYZRPY_COV_IDX::Y_Y] = 1.0;
+  // Box centered at (10,0), yaw 0, length 4. Rear face center is at x=8; rear-left corner (width 2)
+  // is (8, 1).
+  ASSERT_TRUE(model.initialize(t, 10.0, 0.0, 0.0, pose_cov, 0.0, 1.0, 0.0, 1.0, 4.0));
+
+  geometry_msgs::msg::Pose pose0;
+  std::array<double, 36> c0{};
+  geometry_msgs::msg::Twist tw0;
+  ASSERT_TRUE(model.getPredictedState(t, pose0, c0, tw0, c0));
+  EXPECT_NEAR(pose0.position.y, 0.0, 1e-6);
+
+  // Observe the rear-left corner shifted +0.4 in y (small, tight covariance so the gain is
+  // sizable).
+  const std::array<double, 4> corner_cov{0.01, 0.0, 0.0, 0.01};
+  ASSERT_TRUE(model.updateStatePoseCorner(8.0, 1.4, corner_cov, /*is_front=*/false, 1.0, 2.0));
+
+  geometry_msgs::msg::Pose pose1;
+  std::array<double, 36> c1{};
+  geometry_msgs::msg::Twist tw1;
+  ASSERT_TRUE(model.getPredictedState(t, pose1, c1, tw1, c1));
+  EXPECT_GT(pose1.position.y, pose0.position.y);  // moved toward the observation
+  EXPECT_LT(pose1.position.y, 0.4);               // but not past it
+  EXPECT_NEAR(pose1.position.x, 10.0, 0.1);       // longitudinal ~unchanged
 }
 
 }  // namespace autoware::multi_object_tracker

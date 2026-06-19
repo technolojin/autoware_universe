@@ -19,6 +19,7 @@
 
 #include <geometry_msgs/msg/point.hpp>
 
+#include <array>
 #include <limits>
 #include <optional>
 #include <utility>
@@ -107,6 +108,51 @@ struct PolygonGeometry
 // carries has_end_face=true with the observed end-face center. Returns has_corner=false /
 // has_end_face=false / trust=0 when neither cue can be extracted.
 PolygonGeometry analyzePolygonGeometry(
+  const types::DynamicObject & cluster, const geometry_msgs::msg::Point & ego_pos,
+  const types::DynamicObject & prediction);
+
+// Observation-only polygon measurement for the corner-based vehicle update. Every field is a pure
+// function of the cluster footprint and the sensor geometry — NO prior (tracked center / yaw /
+// width / length) enters the mean OR the covariance. The prior is consumed strictly downstream as
+// (a) a discrete face association and (b) the linear measurement model inside the EKF, never
+// injected here. Keeping the mean observation-only and the covariance derived from the measured
+// point geometry (not from agreement with the prediction) is what prevents a self-confirming
+// measurement -> EKF -> measurement feedback loop, and lets genuine misalignment (motion lag,
+// shape change, mis-clustering) surface as an honest innovation instead of being masked.
+struct PolygonMeasurement
+{
+  // Near corner = intersection of the two fitted visible faces (rounding-immune: it is the meeting
+  // point of the two surface lines, not a sampled vertex). Map frame. has_corner is true only when
+  // two statistically distinct ego-facing faces are resolved.
+  bool has_corner = false;
+  geometry_msgs::msg::Point corner;
+  // 2x2 position covariance of `corner` [m^2], row-major {xx, xy, yx, yy}, propagated from the two
+  // line fits. Naturally anisotropic: large along the ill-determined axis as the two faces approach
+  // parallel, so the EKF only corrects the well-observed degrees of freedom.
+  std::array<double, 4> corner_cov{};
+
+  // Heading cue from the longer visible face tangent (direction only — never a length). yaw_var is
+  // continuous, from the point noise and the edge spread, so short / poorly supported edges
+  // naturally carry near-zero weight. Resolved against the predicted axis only for the 180-deg
+  // branch (a discrete choice, not a mean injection).
+  bool has_yaw = false;
+  double yaw = 0.0;
+  double yaw_var = std::numeric_limits<double>::max();
+
+  // One-sided lower bounds on the body dimensions from directly observed surface (occlusion only
+  // ever shortens what is seen). For the separate dimension filter; must never shrink a tracked
+  // dimension. Decoupled from the position measurement above.
+  double visible_length = 0.0;
+  double visible_width = 0.0;
+};
+
+// Observation-only corner / orientation extraction for the vehicle update (see PolygonMeasurement).
+// `cluster` is a POLYGON DynamicObject (footprint in cluster-local frame, pose in map frame);
+// `ego_pos` is the sensor/ego position in map frame (resolves which faces are visible);
+// `prediction` is used ONLY to disambiguate the 180-deg yaw branch — never to build a mean or a
+// covariance. Returns has_corner=false when fewer than two statistically distinct ego-facing faces
+// are present.
+PolygonMeasurement analyzePolygonMeasurement(
   const types::DynamicObject & cluster, const geometry_msgs::msg::Point & ego_pos,
   const types::DynamicObject & prediction);
 

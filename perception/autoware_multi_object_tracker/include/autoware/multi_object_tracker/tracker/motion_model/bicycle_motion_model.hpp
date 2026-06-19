@@ -118,6 +118,20 @@ public:
   bool updateStatePoseFront(
     const double & xf, const double & yf, const std::array<double, 36> & pose_cov);
 
+  // Observed body-corner update. (cx, cy) is the measured near corner and corner_cov its 2x2 map
+  // covariance {xx, xy, yx, yy} — both OBSERVATION-ONLY (from the cluster polygon, never the
+  // prior). The prior body `width` and the front/rear association (`is_front`, lateral sign `s_lat`
+  // in
+  // {+1, -1}) enter ONLY the predicted measurement, not the measured value, so the innovation
+  // carries no self-confirmation. Freezing the lateral normal at the predicted yaw makes the model
+  // linear in the two-point state:
+  //   corner = (1 + g) * p_near - g * p_far + s_lat * (width / 2) * n_pred
+  // with (g, p_near, p_far) the front or rear endpoint blend (as updateStatePoseFront/Rear) and
+  // n_pred = (-sin yaw, cos yaw). Corrects the x/y endpoints only.
+  bool updateStatePoseCorner(
+    const double & cx, const double & cy, const std::array<double, 4> & corner_cov,
+    const bool is_front, const double s_lat, const double width);
+
   enum class LengthUpdateAnchor { CENTER, FRONT, REAR };
   bool updateStateLength(
     const double & new_length, const LengthUpdateAnchor anchor = LengthUpdateAnchor::CENTER);
