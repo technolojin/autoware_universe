@@ -329,7 +329,17 @@ bool VehicleTracker::conditionedUpdate(
   const autoware_perception_msgs::msg::Shape & tracker_shape, const rclcpp::Time & measurement_time,
   const types::InputChannel & channel_info)
 {
-  const auto aligned = shapes::alignClusterToOrientation(measurement, motion_model_.getYawState());
+  // Fine yaw adjustment (A2 + B1): de-bias only the READOUT frame the cluster is aligned to, never
+  // the EKF yaw state. estimateFineYawCorrection fits the cluster's dominant flat edge and returns
+  // a small (<= 5 deg) heading correction; folding it into the alignment yaw lines the polygon's
+  // extent / edge centers up with the body, so the downstream FRONT/REAR vs WEAK classification and
+  // the wheel-anchor position are less biased by a few-degree heading error. The yaw STATE is still
+  // propagated by the motion model alone, so this carries zero feedback into the filter.
+  double align_yaw = motion_model_.getYawState();
+  if (const auto fine_yaw = shapes::estimateFineYawCorrection(measurement, align_yaw)) {
+    align_yaw = autoware_utils_math::normalize_radian(align_yaw + *fine_yaw);
+  }
+  const auto aligned = shapes::alignClusterToOrientation(measurement, align_yaw);
   const types::DynamicObject & meas = aligned ? *aligned : measurement;
 
   UpdateStrategy strategy = determineUpdateStrategy(meas, prediction);

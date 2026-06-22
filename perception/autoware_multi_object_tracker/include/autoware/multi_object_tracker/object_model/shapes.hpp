@@ -48,6 +48,20 @@ bool convertConvexHullToBoundingBox(
 std::optional<types::DynamicObject> alignClusterToOrientation(
   const types::DynamicObject & cluster, double target_yaw);
 
+// Fine yaw adjustment (A2): the small heading correction that best aligns the cluster's dominant
+// visible flat edge to the body axes, found by a least-squares (PCA) fit of that edge's supporting
+// points and folded into a +/- 5 deg window. This is a READOUT aid only — the caller applies it to
+// the cluster-alignment frame (alignClusterToOrientation), NEVER to the EKF yaw state, so it
+// carries zero feedback into the filter: it merely de-biases WHERE the partial polygon is read.
+//
+// `reference_yaw` is the tracked heading the cluster is currently read against. Returns nullopt
+// when no edge is observable enough to trust (too short / too few points / not flat) or when the
+// raw correction exceeds the "fine" window (a large disagreement is an association problem, not a
+// small misalignment, and is left to the motion model). The returned value is in radians, |delta|
+// <= ~5 deg.
+std::optional<double> estimateFineYawCorrection(
+  const types::DynamicObject & cluster, double reference_yaw);
+
 std::pair<double, double> getObjectZRange(const types::DynamicObject & object);
 
 double get3dGeneralizedIoU(

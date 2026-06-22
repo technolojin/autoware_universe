@@ -105,6 +105,7 @@ if(BUILD_TESTING)
     test/test_utils.cpp
     test/test_bench_association.cpp
     test/test_vehicle_tracker.cpp
+    test/test_shapes.cpp
     test/test_uuid_generator.cpp
     test/test_tracker_overlap_manager.cpp
   )
