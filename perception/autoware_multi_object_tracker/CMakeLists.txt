@@ -51,6 +51,7 @@ set(${PROJECT_NAME}_lib
   lib/types.cpp
   lib/object_model/uuid.cpp
   lib/object_model/shapes.cpp
+  lib/object_model/cluster_shape.cpp
   lib/tracker/motion_model/bicycle_motion_model.cpp
   # cspell: ignore ctrv
   lib/tracker/motion_model/ctrv_motion_model.cpp
