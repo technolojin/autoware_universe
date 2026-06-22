@@ -63,9 +63,9 @@ constexpr double FINE_YAW_SUPPORT_BAND =
 constexpr double FINE_YAW_MIN_FACE_EXTENT =
   0.5;  // [m] minimum tangential span of an edge to be a resolved face (not a tip / occlusion edge)
 constexpr size_t FINE_YAW_MIN_SUPPORT_POINTS = 4;    // minimum supporting points for a stable PCA
-constexpr double FINE_YAW_MAX = 5.0 * M_PI / 180.0;  // [rad] hard clamp on the correction
+constexpr double FINE_YAW_MAX = 8.0 * M_PI / 180.0;  // [rad] hard clamp on the correction
 constexpr double FINE_YAW_PRE_CLAMP_REJECT =
-  10.0 * M_PI / 180.0;  // [rad] beyond this it is not fine
+  16.0 * M_PI / 180.0;  // [rad] beyond this it is not fine
 constexpr double FINE_YAW_MAX_RESIDUAL_VAR =
   (2.0 * FINE_YAW_LIDAR_POINT_STD) * (2.0 * FINE_YAW_LIDAR_POINT_STD);  // [m^2] edge-flatness gate
 
@@ -80,24 +80,24 @@ struct EdgeFit
 };
 inline EdgeFit fitEdgePca(const std::vector<std::pair<double, double>> & support)
 {
-  const double inv = 1.0 / static_cast<double>(support.size());
-  double ma = 0.0, ml = 0.0;
-  for (const auto & [a, l] : support) {
-    ma += a;
-    ml += l;
+  const double inv_count = 1.0 / static_cast<double>(support.size());
+  double mean_along = 0.0, mean_lat = 0.0;
+  for (const auto & [along, lat] : support) {
+    mean_along += along;
+    mean_lat += lat;
   }
-  ma *= inv;
-  ml *= inv;
+  mean_along *= inv_count;
+  mean_lat *= inv_count;
   double s_aa = 0.0, s_al = 0.0, s_ll = 0.0;
-  for (const auto & [a, l] : support) {
-    const double da = a - ma, dl = l - ml;
-    s_aa += da * da;
-    s_al += da * dl;
-    s_ll += dl * dl;
+  for (const auto & [along, lat] : support) {
+    const double d_along = along - mean_along, d_lat = lat - mean_lat;
+    s_aa += d_along * d_along;
+    s_al += d_along * d_lat;
+    s_ll += d_lat * d_lat;
   }
-  s_aa *= inv;
-  s_al *= inv;
-  s_ll *= inv;
+  s_aa *= inv_count;
+  s_al *= inv_count;
+  s_ll *= inv_count;
   const double half_tr = 0.5 * (s_aa + s_ll);
   const double disc = std::sqrt(std::max(0.0, half_tr * half_tr - (s_aa * s_ll - s_al * s_al)));
   const double lambda_min = half_tr - disc;
@@ -267,22 +267,22 @@ std::optional<types::DynamicObject> alignClusterToOrientation(
 std::optional<double> estimateFineYawCorrection(
   const types::DynamicObject & cluster, const double reference_yaw)
 {
-  const auto & pts = cluster.shape.footprint.points;
-  if (cluster.shape.type != autoware_perception_msgs::msg::Shape::POLYGON || pts.size() < 3) {
+  const auto & points = cluster.shape.footprint.points;
+  if (cluster.shape.type != autoware_perception_msgs::msg::Shape::POLYGON || points.size() < 3) {
     return std::nullopt;
   }
 
   // Project every cluster-local point into the body frame at reference_yaw. phi composes the
   // cluster-local -> map -> body rotations into one angle (same convention as
-  // computeOrientedExtent), so (a, l) are body-longitudinal / body-lateral coordinates and a flat
-  // edge's PCA major axis angle is the residual misalignment directly.
+  // computeOrientedExtent), so (along, lat) are body-longitudinal / body-lateral coordinates and a
+  // flat edge's PCA major axis angle is the residual misalignment directly.
   const double phi = reference_yaw - tf2::getYaw(cluster.pose.orientation);
-  const double cphi = std::cos(phi), sphi = std::sin(phi);
-  std::vector<std::pair<double, double>> al;
-  al.reserve(pts.size());
-  const auto ext = computeOrientedExtent(pts, cphi, sphi);
-  for (const auto & p : pts) {
-    al.emplace_back(p.x * cphi + p.y * sphi, -p.x * sphi + p.y * cphi);
+  const double cos_phi = std::cos(phi), sin_phi = std::sin(phi);
+  std::vector<std::pair<double, double>> body_points;
+  body_points.reserve(points.size());
+  const auto ext = computeOrientedExtent(points, cos_phi, sin_phi);
+  for (const auto & p : points) {
+    body_points.emplace_back(p.x * cos_phi + p.y * sin_phi, -p.x * sin_phi + p.y * cos_phi);
   }
 
   // Four candidate faces (the two longitudinal extremes and the two lateral extremes). Each is
@@ -304,20 +304,24 @@ std::optional<double> estimateFineYawCorrection(
     // Tangential extremes mark where the two adjacent (perpendicular) faces meet this one — the
     // corners. Fit the flat INTERIOR only: a corner blends in the perpendicular face and biases the
     // tangent (an L-shape otherwise pulls the PCA major axis toward the diagonal).
-    const double t_min = f.perp_is_along ? ext.min_lat : ext.min_along;
-    const double t_max = f.perp_is_along ? ext.max_lat : ext.max_along;
+    const double tang_extent_min = f.perp_is_along ? ext.min_lat : ext.min_along;
+    const double tang_extent_max = f.perp_is_along ? ext.max_lat : ext.max_along;
     std::vector<std::pair<double, double>> support;
-    double tmin = std::numeric_limits<double>::max(), tmax = std::numeric_limits<double>::lowest();
-    for (const auto & [a, l] : al) {
-      const double perp = f.perp_is_along ? a : l;
+    double tang_min = std::numeric_limits<double>::max();
+    double tang_max = std::numeric_limits<double>::lowest();
+    for (const auto & [along, lat] : body_points) {
+      const double perp = f.perp_is_along ? along : lat;
       if (std::abs(perp - f.extreme) > FINE_YAW_SUPPORT_BAND) continue;
-      const double tang = f.perp_is_along ? l : a;
-      if (tang - t_min < FINE_YAW_SUPPORT_BAND || t_max - tang < FINE_YAW_SUPPORT_BAND) continue;
-      tmin = std::min(tmin, tang);
-      tmax = std::max(tmax, tang);
-      support.emplace_back(a, l);
+      const double tangential = f.perp_is_along ? lat : along;
+      if (
+        tangential - tang_extent_min < FINE_YAW_SUPPORT_BAND ||
+        tang_extent_max - tangential < FINE_YAW_SUPPORT_BAND)
+        continue;
+      tang_min = std::min(tang_min, tangential);
+      tang_max = std::max(tang_max, tangential);
+      support.emplace_back(along, lat);
     }
-    const double span = tmax - tmin;
+    const double span = tang_max - tang_min;
     if (support.size() >= FINE_YAW_MIN_SUPPORT_POINTS && span > best_span) {
       best_span = span;
       best_support = std::move(support);
