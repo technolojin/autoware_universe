@@ -379,6 +379,21 @@ void MultiObjectTracker::publish()
 
   const rclcpp::Time current_time = this->now();
   const rclcpp::Time last_tracker_time = state_.last_tracker_time;
+
+  // Do not publish before the tracker has been initialized by a real measurement. Under sim time,
+  // this->now() can return 0 before /clock is received, leaving last_tracker_time at 0. Publishing
+  // in that state emits an epoch-0, empty TrackedObjects whose degenerate stamp propagates to
+  // downstream consumers (map_based_prediction) and has been observed to trigger a serialization
+  // fault and a negative-time abort. Skip until the first measurement provides a valid time.
+  if (last_tracker_time.nanoseconds() <= 0) {
+    RCLCPP_WARN_THROTTLE(
+      get_logger(), *get_clock(), 2000,
+      "Skipping publish: tracker time not yet initialized (last_tracker_time ns=%ld). Waiting for "
+      "the first measurement.",
+      last_tracker_time.nanoseconds());
+    return;
+  }
+
   debugger_->startPublishTime(current_time);
   core::PublishingData publishing_data;
   {

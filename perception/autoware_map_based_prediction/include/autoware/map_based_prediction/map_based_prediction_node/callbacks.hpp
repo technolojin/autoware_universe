@@ -89,6 +89,12 @@ private:
 
   Diagnostics * diagnostics_{};
 
+  // Body of objectsCallback(). Kept separate so objectsCallback() can wrap it in a single
+  // try/catch: a corrupt/partially-deserialized input can carry a negative header stamp that makes
+  // any rclcpp::Time(stamp) construction throw and abort the node, and the offending conversion is
+  // not stable across the callback, so the guard has to cover the whole processing path.
+  void processObjects(const AUTOWARE_MESSAGE_CONST_SHARED_PTR(TrackedObjects) & in_objects);
+
   void trafficSignalsCallback(
     const AUTOWARE_MESSAGE_CONST_SHARED_PTR(TrafficLightGroupArray) & msg);
   void publish(

@@ -104,31 +104,34 @@ void ObjectsCallback::trafficSignalsCallback(
 void ObjectsCallback::objectsCallback(
   const AUTOWARE_MESSAGE_CONST_SHARED_PTR(TrackedObjects) & in_objects)
 {
+  // A corrupt / partially-deserialized TrackedObjects (the logs show upstream CycloneDDS
+  // "invalid data size" / typesupport faults) can carry a header stamp with sec < 0. Every
+  // rclcpp::Time(stamp) built from it throws "cannot store a negative time point in rclcpp::Time",
+  // which propagates out of the subscription callback and aborts the whole node. Several such
+  // conversions exist on the processing path (input stamp, tf lookup, diagnostics/publish stamp)
+  // and the offending read is NOT stable across the callback, so guarding any single one just
+  // moves the crash to the next. Wrapping the whole body in one try/catch is what actually keeps
+  // the node alive; the log below confirms the guard fired and lets the corrupt input be traced.
+  try {
+    processObjects(in_objects);
+  } catch (const std::exception & e) {
+    static rclcpp::Clock throttle_clock(RCL_STEADY_TIME);
+    const auto & s = in_objects->header.stamp;
+    RCLCPP_INFO_THROTTLE(
+      rclcpp::get_logger("map_based_prediction"), throttle_clock, 1000,
+      "[objectsCallback guard] caught an exception and kept the node alive (dropped this message): "
+      "%s. Offending input: stamp sec=%d nanosec=%u frame_id='%s' n_objects=%zu (likely corrupt).",
+      e.what(), s.sec, s.nanosec, in_objects->header.frame_id.c_str(), in_objects->objects.size());
+  }
+}
+
+void ObjectsCallback::processObjects(
+  const AUTOWARE_MESSAGE_CONST_SHARED_PTR(TrackedObjects) & in_objects)
+{
   std::unique_ptr<ScopedTimeTrack> st_ptr;
   if (state_.time_keeper) st_ptr = std::make_unique<ScopedTimeTrack>(__func__, *state_.time_keeper);
 
-  // [stamp-debug] Log the raw incoming header stamp fields BEFORE any rclcpp::Time construction and
-  // before any early return. rclcpp::Time(header.stamp) throws "cannot store a negative time point"
-  // when sec < 0, so we print the raw sec/nanosec (which cannot throw) to capture the actual value
-  // that reaches us. On a negative sec we report and return here to keep the node alive, so we can
-  // observe whether it is intermittent and compare against the tracker's published stamp. Note the
-  // preceding CycloneDDS "invalid data size / typesupport identifier not supported" errors: a
-  // negative sec is likely garbage from a corrupt deserialization, not a genuine tracker time.
-  {
-    const auto & s = in_objects->header.stamp;
-    RCLCPP_INFO(
-      rclcpp::get_logger("map_based_prediction"),
-      "[stamp-debug] incoming TrackedObjects: frame_id='%s' sec=%d nanosec=%u n_objects=%zu",
-      in_objects->header.frame_id.c_str(), s.sec, s.nanosec, in_objects->objects.size());
-    if (s.sec < 0) {
-      RCLCPP_ERROR(
-        rclcpp::get_logger("map_based_prediction"),
-        "[stamp-debug] NEGATIVE stamp received (sec=%d nanosec=%u frame_id='%s' n_objects=%zu) - "
-        "skipping message to avoid abort; likely corrupt deserialization (see serdata errors above)",
-        s.sec, s.nanosec, in_objects->header.frame_id.c_str(), in_objects->objects.size());
-      return;
-    }
-  }
+  const rclcpp::Time objects_time(in_objects->header.stamp);
 
   stop_watch_ptr_->toc("processing_time", true);
 
@@ -143,12 +146,11 @@ void ObjectsCallback::objectsCallback(
   const bool is_object_not_in_map_frame = in_objects->header.frame_id != "map";
   if (is_object_not_in_map_frame) {
     world2map_transform = transform_listener_.get_transform(
-      "map", in_objects->header.frame_id, in_objects->header.stamp,
-      rclcpp::Duration::from_seconds(0.1));
+      "map", in_objects->header.frame_id, objects_time, rclcpp::Duration::from_seconds(0.1));
     if (!world2map_transform) return;
   }
 
-  const double objects_detected_time = rclcpp::Time(in_objects->header.stamp).seconds();
+  const double objects_detected_time = objects_time.seconds();
 
   state_.predictor_vehicle->removeOldHistory(
     objects_detected_time, state_.params.object_buffer_time_length);

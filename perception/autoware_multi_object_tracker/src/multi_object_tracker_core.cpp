@@ -271,15 +271,6 @@ ObjectProcessingResult process_objects_batch(
   state.last_updated_time = current_time;
   state.last_tracker_time = objects_with_associations.back().getTimestamp();
 
-  // [stamp-debug] Report the timestamp taken from the latest processed detection. In the default
-  // delay_compensation=none mode this value is published verbatim as the output header stamp, so a
-  // negative value here is directly the source of the downstream "negative time point" crash.
-  RCLCPP_INFO(
-    logger,
-    "[stamp-debug] batch: last_tracker_time ns=%ld (%.3f s) | current_time ns=%ld | n_batches=%zu",
-    state.last_tracker_time.nanoseconds(), state.last_tracker_time.seconds(),
-    current_time.nanoseconds(), objects_with_associations.size());
-
   // process end - end measurement time after processing
   debugger.endMeasurementTime(current_time);
 
@@ -321,16 +312,21 @@ PublishingData prepare_publishing_data(
       break;
   }
 
-  // [stamp-debug] Report the export reference time that will become the published header stamp.
-  // A negative ns here is exactly what makes downstream map_based_prediction throw
-  // "cannot store a negative time point". mode: 0=NONE 1=PUBLISH_DELAY 2=ODOMETRY 3=FULL.
-  RCLCPP_INFO(
-    logger,
-    "[stamp-debug] publish object_time ns=%ld (%.3f s) | mode=%d | last_tracker_time ns=%ld | "
-    "current_time ns=%ld",
-    result.object_time.nanoseconds(), result.object_time.seconds(),
-    static_cast<int>(params.delay_compensation), last_tracker_time.nanoseconds(),
-    current_time.nanoseconds());
+  // Defensive: never export a non-positive timestamp. Once the tracker is initialized every delay
+  // mode should yield object_time > 0, but clamp here as a final safety net (e.g. ODOMETRY mode
+  // draws from an independent ego-pose time) so we can never publish a stamp that would make a
+  // downstream consumer throw on rclcpp::Time construction. mode: 0=NONE 1=PUBLISH_DELAY 2=ODOMETRY
+  // 3=FULL.
+  if (result.object_time.nanoseconds() <= 0) {
+    static rclcpp::Clock throttle_clock(RCL_STEADY_TIME);
+    RCLCPP_WARN_THROTTLE(
+      logger, throttle_clock, 2000,
+      "Computed non-positive export time (object_time ns=%ld, mode=%d, last_tracker_time ns=%ld); "
+      "clamping to current_time ns=%ld to avoid emitting an invalid stamp.",
+      result.object_time.nanoseconds(), static_cast<int>(params.delay_compensation),
+      last_tracker_time.nanoseconds(), current_time.nanoseconds());
+    result.object_time = current_time;
+  }
 
   /// Tracker pruning
   state.processor->prune(last_tracker_time);
