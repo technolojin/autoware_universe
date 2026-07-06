@@ -89,10 +89,15 @@ private:
 
   Diagnostics * diagnostics_{};
 
-  // Body of objectsCallback(). Kept separate so objectsCallback() can wrap it in a single
-  // try/catch: a corrupt/partially-deserialized input can carry a negative header stamp that makes
-  // any rclcpp::Time(stamp) construction throw and abort the node, and the offending conversion is
-  // not stable across the callback, so the guard has to cover the whole processing path.
+  // Guard 1: validate the raw header stamp before any rclcpp::Time is built from it (a corrupt,
+  // partially-deserialized input can carry a negative stamp that makes every rclcpp::Time(stamp)
+  // conversion throw and abort the node). Returns false and logs a precise reason on rejection.
+  static bool hasValidHeaderStamp(
+    const AUTOWARE_MESSAGE_CONST_SHARED_PTR(TrackedObjects) & in_objects);
+
+  // Body of objectsCallback(), run only after hasValidHeaderStamp() passes. The per-object
+  // prediction loop is guarded individually (Guard 2) so one malformed object is skipped rather
+  // than dropping the frame; objectsCallback() keeps a last-resort catch (Guard 3) around this call.
   void processObjects(const AUTOWARE_MESSAGE_CONST_SHARED_PTR(TrackedObjects) & in_objects);
 
   void trafficSignalsCallback(

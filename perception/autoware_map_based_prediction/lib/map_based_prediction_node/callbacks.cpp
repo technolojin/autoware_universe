@@ -101,26 +101,44 @@ void ObjectsCallback::trafficSignalsCallback(
   state_.predictor_vru->setTrafficSignal(*msg);
 }
 
+bool ObjectsCallback::hasValidHeaderStamp(
+  const AUTOWARE_MESSAGE_CONST_SHARED_PTR(TrackedObjects) & in_objects)
+{
+  // Guard 1 (deterministic root cause): validate the raw header-stamp fields BEFORE anything builds
+  // an rclcpp::Time from them. rclcpp::Time(stamp) throws "cannot store a negative time point" for
+  // sec < 0, and every time conversion on the processing path (input stamp, tf lookup, history
+  // pruning, diagnostics/publish stamp) derives from this one stamp - so validating it here, where
+  // it cannot throw, pinpoints a corrupt input as the root cause and stops the crash at its source.
+  const auto & stamp = in_objects->header.stamp;
+  const bool is_valid = stamp.sec >= 0 && stamp.nanosec < 1000000000u;
+  if (!is_valid) {
+    RCLCPP_WARN(
+      rclcpp::get_logger("map_based_prediction"),
+      "[guard: input-stamp] dropped TrackedObjects with invalid header stamp (sec=%d nanosec=%u): "
+      "sec must be >= 0 and nanosec < 1e9. frame_id='%s' n_objects=%zu. Likely a corrupt "
+      "deserialization (see upstream CycloneDDS 'invalid data size' / typesupport errors).",
+      stamp.sec, stamp.nanosec, in_objects->header.frame_id.c_str(), in_objects->objects.size());
+  }
+  return is_valid;
+}
+
 void ObjectsCallback::objectsCallback(
   const AUTOWARE_MESSAGE_CONST_SHARED_PTR(TrackedObjects) & in_objects)
 {
-  // A corrupt / partially-deserialized TrackedObjects (the logs show upstream CycloneDDS
-  // "invalid data size" / typesupport faults) can carry a header stamp with sec < 0. Every
-  // rclcpp::Time(stamp) built from it throws "cannot store a negative time point in rclcpp::Time",
-  // which propagates out of the subscription callback and aborts the whole node. Several such
-  // conversions exist on the processing path (input stamp, tf lookup, diagnostics/publish stamp)
-  // and the offending read is NOT stable across the callback, so guarding any single one just
-  // moves the crash to the next. Wrapping the whole body in one try/catch is what actually keeps
-  // the node alive; the log below confirms the guard fired and lets the corrupt input be traced.
+  if (!hasValidHeaderStamp(in_objects)) return;
+
+  // Guard 3 (last resort): the header stamp is validated above and the per-object loop is guarded
+  // individually inside processObjects, so any exception reaching here comes from an unforeseen
+  // unit. Keep the node alive and flag it as unattributed - if this ever fires, add a dedicated
+  // small-unit guard for the reported stage rather than relying on this catch-all.
   try {
     processObjects(in_objects);
   } catch (const std::exception & e) {
-    static rclcpp::Clock throttle_clock(RCL_STEADY_TIME);
     const auto & s = in_objects->header.stamp;
-    RCLCPP_INFO_THROTTLE(
-      rclcpp::get_logger("map_based_prediction"), throttle_clock, 1000,
-      "[objectsCallback guard] caught an exception and kept the node alive (dropped this message): "
-      "%s. Offending input: stamp sec=%d nanosec=%u frame_id='%s' n_objects=%zu (likely corrupt).",
+    RCLCPP_WARN(
+      rclcpp::get_logger("map_based_prediction"),
+      "[guard: unattributed] exception from an unguarded stage, message dropped to keep node "
+      "alive: %s. Input header: stamp sec=%d nanosec=%u frame_id='%s' n_objects=%zu.",
       e.what(), s.sec, s.nanosec, in_objects->header.frame_id.c_str(), in_objects->objects.size());
   }
 }
@@ -166,48 +184,66 @@ void ObjectsCallback::processObjects(
 
   state_.predictor_vru->loadCurrentCrosswalkUsers(*in_objects);
 
-  for (const auto & object : in_objects->objects) {
-    TrackedObject transformed_object = object;
+  for (size_t object_index = 0; object_index < in_objects->objects.size(); ++object_index) {
+    const auto & object = in_objects->objects[object_index];
 
-    if (is_object_not_in_map_frame) {
-      geometry_msgs::msg::PoseStamped pose_in_map;
-      geometry_msgs::msg::PoseStamped pose_orig;
-      pose_orig.pose = object.kinematics.pose_with_covariance.pose;
-      tf2::doTransform(pose_orig, pose_in_map, *world2map_transform);
-      transformed_object.kinematics.pose_with_covariance.pose = pose_in_map.pose;
-    }
+    // Guard 2 (per-object root cause): one malformed object must not drop the whole frame nor abort
+    // the node. Any exception here is attributed to this specific object - its index, uuid and label
+    // are logged so the offending detection and the predictor that raised it can be traced - and
+    // then skipped so the remaining objects are still predicted.
+    try {
+      TrackedObject transformed_object = object;
 
-    const auto & label_ =
-      autoware::object_recognition_utils::getHighestProbLabel(transformed_object.classification);
-    const auto label = utils::changeVRULabelForPrediction(label_, object, state_.lanelet_map_ptr);
+      if (is_object_not_in_map_frame) {
+        geometry_msgs::msg::PoseStamped pose_in_map;
+        geometry_msgs::msg::PoseStamped pose_orig;
+        pose_orig.pose = object.kinematics.pose_with_covariance.pose;
+        tf2::doTransform(pose_orig, pose_in_map, *world2map_transform);
+        transformed_object.kinematics.pose_with_covariance.pose = pose_in_map.pose;
+      }
 
-    switch (label) {
-      case ObjectClassification::PEDESTRIAN:
-      case ObjectClassification::BICYCLE: {
-        output.objects.emplace_back(
-          state_.predictor_vru->predict(output.header, transformed_object));
-        break;
+      const auto & label_ =
+        autoware::object_recognition_utils::getHighestProbLabel(transformed_object.classification);
+      const auto label = utils::changeVRULabelForPrediction(label_, object, state_.lanelet_map_ptr);
+
+      switch (label) {
+        case ObjectClassification::PEDESTRIAN:
+        case ObjectClassification::BICYCLE: {
+          output.objects.emplace_back(
+            state_.predictor_vru->predict(output.header, transformed_object));
+          break;
+        }
+        case ObjectClassification::CAR:
+        case ObjectClassification::BUS:
+        case ObjectClassification::TRAILER:
+        case ObjectClassification::MOTORCYCLE:
+        case ObjectClassification::TRUCK: {
+          const auto predicted_object_opt = state_.predictor_vehicle->predict(
+            output.header, transformed_object, objects_detected_time,
+            pub_debug_markers_ ? &debug_markers : nullptr);
+          if (predicted_object_opt) output.objects.push_back(predicted_object_opt.value());
+          break;
+        }
+        default: {
+          auto predicted_unknown_object = utils::convertToPredictedObject(transformed_object);
+          PredictedPath predicted_path = state_.path_generator->generatePathForNonVehicleObject(
+            transformed_object, state_.params.prediction_time_horizon_unknown);
+          predicted_path.confidence = 1.0;
+          predicted_unknown_object.kinematics.predicted_paths.push_back(predicted_path);
+          output.objects.push_back(predicted_unknown_object);
+          break;
+        }
       }
-      case ObjectClassification::CAR:
-      case ObjectClassification::BUS:
-      case ObjectClassification::TRAILER:
-      case ObjectClassification::MOTORCYCLE:
-      case ObjectClassification::TRUCK: {
-        const auto predicted_object_opt = state_.predictor_vehicle->predict(
-          output.header, transformed_object, objects_detected_time,
-          pub_debug_markers_ ? &debug_markers : nullptr);
-        if (predicted_object_opt) output.objects.push_back(predicted_object_opt.value());
-        break;
-      }
-      default: {
-        auto predicted_unknown_object = utils::convertToPredictedObject(transformed_object);
-        PredictedPath predicted_path = state_.path_generator->generatePathForNonVehicleObject(
-          transformed_object, state_.params.prediction_time_horizon_unknown);
-        predicted_path.confidence = 1.0;
-        predicted_unknown_object.kinematics.predicted_paths.push_back(predicted_path);
-        output.objects.push_back(predicted_unknown_object);
-        break;
-      }
+    } catch (const std::exception & e) {
+      const auto label = autoware::object_recognition_utils::getHighestProbLabel(
+        object.classification);
+      RCLCPP_WARN(
+        rclcpp::get_logger("map_based_prediction"),
+        "[guard: predict-object] skipped object %zu/%zu (uuid=%s label=%d): %s",
+        object_index, in_objects->objects.size(),
+        autoware_utils::to_hex_string(object.object_id).c_str(), static_cast<int>(label),
+        e.what());
+      continue;
     }
   }
 

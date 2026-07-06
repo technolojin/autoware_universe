@@ -319,8 +319,8 @@ PublishingData prepare_publishing_data(
   // 3=FULL.
   if (result.object_time.nanoseconds() <= 0) {
     static rclcpp::Clock throttle_clock(RCL_STEADY_TIME);
-    RCLCPP_WARN_THROTTLE(
-      logger, throttle_clock, 2000,
+    RCLCPP_WARN(
+      logger,
       "Computed non-positive export time (object_time ns=%ld, mode=%d, last_tracker_time ns=%ld); "
       "clamping to current_time ns=%ld to avoid emitting an invalid stamp.",
       result.object_time.nanoseconds(), static_cast<int>(params.delay_compensation),
