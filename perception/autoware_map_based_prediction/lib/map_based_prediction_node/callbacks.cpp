@@ -149,31 +149,65 @@ void ObjectsCallback::processObjects(
   std::unique_ptr<ScopedTimeTrack> st_ptr;
   if (state_.time_keeper) st_ptr = std::make_unique<ScopedTimeTrack>(__func__, *state_.time_keeper);
 
-  const rclcpp::Time objects_time(in_objects->header.stamp);
+  // Guard: run one processing stage under its own try/catch. On failure the node is kept alive and
+  // the failing unit is named in the log, so a fault (e.g. a stray rclcpp::Time built from a
+  // negative value) is localized to a single stage instead of an opaque whole-callback catch.
+  // Returns false when the stage threw, so the caller drops the rest of this message.
+  const auto run_stage = [&in_objects](const char * stage, auto && stage_body) -> bool {
+    try {
+      stage_body();
+      return true;
+    } catch (const std::exception & e) {
+      const auto & s = in_objects->header.stamp;
+      RCLCPP_WARN(
+        rclcpp::get_logger("map_based_prediction"),
+        "[guard: %s] exception, message dropped to keep node alive: %s. "
+        "Input header: stamp sec=%d nanosec=%u frame_id='%s' n_objects=%zu.",
+        stage, e.what(), s.sec, s.nanosec, in_objects->header.frame_id.c_str(),
+        in_objects->objects.size());
+      return false;
+    }
+  };
+
+  rclcpp::Time objects_time;
+  if (!run_stage("convert-input-time", [&] {
+        objects_time = rclcpp::Time(in_objects->header.stamp);
+      }))
+    return;
 
   stop_watch_ptr_->toc("processing_time", true);
 
-  {
-    const auto msg = sub_traffic_signals_->take_data();
-    if (msg) trafficSignalsCallback(msg);
-  }
+  if (!run_stage("traffic-signals", [&] {
+        const auto msg = sub_traffic_signals_->take_data();
+        if (msg) trafficSignalsCallback(msg);
+      }))
+    return;
 
   if (!state_.lanelet_map_ptr) return;
 
   geometry_msgs::msg::TransformStamped::ConstSharedPtr world2map_transform;
   const bool is_object_not_in_map_frame = in_objects->header.frame_id != "map";
   if (is_object_not_in_map_frame) {
-    world2map_transform = transform_listener_.get_transform(
-      "map", in_objects->header.frame_id, objects_time, rclcpp::Duration::from_seconds(0.1));
+    if (!run_stage("tf-lookup", [&] {
+          world2map_transform = transform_listener_.get_transform(
+            "map", in_objects->header.frame_id, objects_time, rclcpp::Duration::from_seconds(0.1));
+        }))
+      return;
     if (!world2map_transform) return;
   }
 
   const double objects_detected_time = objects_time.seconds();
 
-  state_.predictor_vehicle->removeOldHistory(
-    objects_detected_time, state_.params.object_buffer_time_length);
-  state_.predictor_vru->removeOldKnownMatches(
-    objects_detected_time, state_.params.object_buffer_time_length);
+  if (!run_stage("remove-old-history-vehicle", [&] {
+        state_.predictor_vehicle->removeOldHistory(
+          objects_detected_time, state_.params.object_buffer_time_length);
+      }))
+    return;
+  if (!run_stage("remove-old-history-vru", [&] {
+        state_.predictor_vru->removeOldKnownMatches(
+          objects_detected_time, state_.params.object_buffer_time_length);
+      }))
+    return;
 
   auto output_msg = ALLOCATE_OUTPUT_MESSAGE_UNIQUE(pub_objects_);
   PredictedObjects & output = *output_msg;
@@ -182,7 +216,10 @@ void ObjectsCallback::processObjects(
 
   visualization_msgs::msg::MarkerArray debug_markers;
 
-  state_.predictor_vru->loadCurrentCrosswalkUsers(*in_objects);
+  if (!run_stage("load-crosswalk-users", [&] {
+        state_.predictor_vru->loadCurrentCrosswalkUsers(*in_objects);
+      }))
+    return;
 
   for (size_t object_index = 0; object_index < in_objects->objects.size(); ++object_index) {
     const auto & object = in_objects->objects[object_index];
@@ -248,17 +285,29 @@ void ObjectsCallback::processObjects(
   }
 
   if (state_.params.remember_lost_crosswalk_users) {
-    PredictedObjects retrieved_objects = state_.predictor_vru->retrieveUndetectedObjects();
-    output.objects.insert(
-      output.objects.end(), retrieved_objects.objects.begin(), retrieved_objects.objects.end());
+    if (!run_stage("retrieve-undetected", [&] {
+          PredictedObjects retrieved_objects = state_.predictor_vru->retrieveUndetectedObjects();
+          output.objects.insert(
+            output.objects.end(), retrieved_objects.objects.begin(),
+            retrieved_objects.objects.end());
+        }))
+      return;
   }
 
-  publish(std::move(output_msg), debug_markers);
+  // Capture the stamp before publish() moves output_msg, so diagnostics does not read moved-from
+  // memory and so the diagnostics stage can be guarded independently of publish.
+  const auto output_stamp = output.header.stamp;
+
+  if (!run_stage("publish", [&] { publish(std::move(output_msg), debug_markers); })) return;
 
   const auto processing_time_ms = stop_watch_ptr_->toc("processing_time", true);
   const auto cyclic_time_ms = stop_watch_ptr_->toc("cyclic_time", true);
 
-  if (diagnostics_) diagnostics_->update(output.header.stamp, processing_time_ms, cyclic_time_ms);
+  if (diagnostics_) {
+    run_stage("diagnostics-update", [&] {
+      diagnostics_->update(output_stamp, processing_time_ms, cyclic_time_ms);
+    });
+  }
 }
 
 void ObjectsCallback::publish(
