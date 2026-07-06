@@ -107,6 +107,29 @@ void ObjectsCallback::objectsCallback(
   std::unique_ptr<ScopedTimeTrack> st_ptr;
   if (state_.time_keeper) st_ptr = std::make_unique<ScopedTimeTrack>(__func__, *state_.time_keeper);
 
+  // [stamp-debug] Log the raw incoming header stamp fields BEFORE any rclcpp::Time construction and
+  // before any early return. rclcpp::Time(header.stamp) throws "cannot store a negative time point"
+  // when sec < 0, so we print the raw sec/nanosec (which cannot throw) to capture the actual value
+  // that reaches us. On a negative sec we report and return here to keep the node alive, so we can
+  // observe whether it is intermittent and compare against the tracker's published stamp. Note the
+  // preceding CycloneDDS "invalid data size / typesupport identifier not supported" errors: a
+  // negative sec is likely garbage from a corrupt deserialization, not a genuine tracker time.
+  {
+    const auto & s = in_objects->header.stamp;
+    RCLCPP_INFO(
+      rclcpp::get_logger("map_based_prediction"),
+      "[stamp-debug] incoming TrackedObjects: frame_id='%s' sec=%d nanosec=%u n_objects=%zu",
+      in_objects->header.frame_id.c_str(), s.sec, s.nanosec, in_objects->objects.size());
+    if (s.sec < 0) {
+      RCLCPP_ERROR(
+        rclcpp::get_logger("map_based_prediction"),
+        "[stamp-debug] NEGATIVE stamp received (sec=%d nanosec=%u frame_id='%s' n_objects=%zu) - "
+        "skipping message to avoid abort; likely corrupt deserialization (see serdata errors above)",
+        s.sec, s.nanosec, in_objects->header.frame_id.c_str(), in_objects->objects.size());
+      return;
+    }
+  }
+
   stop_watch_ptr_->toc("processing_time", true);
 
   {
