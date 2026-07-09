@@ -33,6 +33,62 @@ namespace autoware::multi_object_tracker
 // CTRV : Constant Turn Rate and constant Velocity
 using autoware_utils_geometry::xyzrpy_covariance_index::XYZRPY_COV_IDX;
 
+namespace
+{
+// Measurement covariance for the two-axle observation [x1, y1, x2, y2].
+//
+// The state carries the rear/front axle points and derives yaw geometrically as
+// atan2(Y2 - Y1, X2 - X1). A measurement supplies (x, y, yaw), mapped to the two points by
+//   x1 = x - lr*cos(yaw),  y1 = y - lr*sin(yaw),
+//   x2 = x + lf*cos(yaw),  y2 = y + lf*sin(yaw).
+// Filling R from position variance alone leaves the two axle points uncorrelated, so their
+// differential - which *is* the heading - carries ~position variance regardless of the modeled
+// YAW_YAW, making yaw updates weak. We retune ONLY the rotational (yaw) mode of that baseline to
+// the modeled yaw variance, leaving the translation and length (stretch) modes untouched so the
+// position confidence the rest of the pipeline relies on (e.g. covariance-tier merging) is
+// preserved:
+//   R = R_pos + (YAW_YAW - g^T R_pos g / |g|^4) * g g^T,   g = d[x1,y1,x2,y2]/d(yaw).
+// Along g the variance becomes YAW_YAW * |g|^2 (>= 0, so R stays PSD); every mode orthogonal to g
+// is unchanged. A small YAW_YAW therefore tightly and directly constrains heading.
+Eigen::Matrix4d axlePointCovFromPoseCov(
+  const std::array<double, 36> & pose_cov, const double cos_yaw, const double sin_yaw,
+  const double lr, const double lf)
+{
+  // Baseline: per-point position covariance (two independent axle points), as before.
+  const double p_xx = pose_cov[XYZRPY_COV_IDX::X_X];
+  const double p_xy = pose_cov[XYZRPY_COV_IDX::X_Y];
+  const double p_yx = pose_cov[XYZRPY_COV_IDX::Y_X];
+  const double p_yy = pose_cov[XYZRPY_COV_IDX::Y_Y];
+  Eigen::Matrix4d r_cov = Eigen::Matrix4d::Zero();
+  r_cov(0, 0) = p_xx;
+  r_cov(0, 1) = p_xy;
+  r_cov(1, 0) = p_yx;
+  r_cov(1, 1) = p_yy;
+  r_cov(2, 2) = p_xx;
+  r_cov(2, 3) = p_xy;
+  r_cov(3, 2) = p_yx;
+  r_cov(3, 3) = p_yy;
+
+  // Rotational (yaw) direction in point space; |g|^2 = lr^2 + lf^2.
+  Eigen::Vector4d g;
+  g << lr * sin_yaw, -lr * cos_yaw, -lf * sin_yaw, lf * cos_yaw;
+  const double g2 = g.squaredNorm();
+  if (g2 < 1e-12) return r_cov;
+
+  // Retune the along-g variance toward the modeled yaw covariance (rank-1, PSD-preserving).
+  // Clamp k <= 0 so the yaw mode can only be *tightened*, never loosened: the two-point
+  // decomposition already implies a yaw stddev of ~sqrt(2)*sigma_pos/wheelbase (a few degrees for
+  // a full-size vehicle), which is often tighter than a loosely-modeled measurement yaw. Loosening
+  // would inflate the rear-axle point covariance via the wheelbase lever and perturb the
+  // position-confidence the pipeline relies on. It engages only when the channel supplies a yaw
+  // covariance tighter than the position-implied one.
+  const double g_r_g = g.dot(r_cov * g);
+  const double k = std::min(0.0, pose_cov[XYZRPY_COV_IDX::YAW_YAW] - g_r_g / (g2 * g2));
+  r_cov += k * g * g.transpose();
+  return r_cov;
+}
+}  // namespace
+
 BicycleMotionModel::BicycleMotionModel() : logger_(rclcpp::get_logger("BicycleMotionModel"))
 {
   // set prediction parameters
@@ -167,15 +223,10 @@ bool BicycleMotionModel::updateStatePoseHead(
   C(2, IDX::X2) = 1.0;
   C(3, IDX::Y2) = 1.0;
 
-  Eigen::Matrix<double, DIM_Y, DIM_Y> R = Eigen::Matrix<double, DIM_Y, DIM_Y>::Zero();
-  R(0, 0) = pose_cov[XYZRPY_COV_IDX::X_X];
-  R(0, 1) = pose_cov[XYZRPY_COV_IDX::X_Y];
-  R(1, 0) = pose_cov[XYZRPY_COV_IDX::Y_X];
-  R(1, 1) = pose_cov[XYZRPY_COV_IDX::Y_Y];
-  R(2, 2) = pose_cov[XYZRPY_COV_IDX::X_X];
-  R(2, 3) = pose_cov[XYZRPY_COV_IDX::X_Y];
-  R(3, 2) = pose_cov[XYZRPY_COV_IDX::Y_X];
-  R(3, 3) = pose_cov[XYZRPY_COV_IDX::Y_Y];
+  // Yaw-aware measurement covariance: propagate (x, y, yaw) cov through the two-axle decomposition
+  // so the modeled YAW_YAW actually constrains heading (was position-only, which left yaw soft).
+  const Eigen::Matrix<double, DIM_Y, DIM_Y> R =
+    axlePointCovFromPoseCov(pose_cov, cos_yaw, sin_yaw, lr, lf);
 
   return ekf_.update(Y, C, R);
 }
@@ -231,15 +282,10 @@ bool BicycleMotionModel::updateStatePoseHeadVel(
   C(4, IDX::U) = 1.0;
   C(5, IDX::V) = 1.0;
 
+  // Yaw-aware measurement covariance for the pose block (see axlePointCovFromPoseCov); the two
+  // velocity rows are appended unchanged.
   Eigen::Matrix<double, DIM_Y, DIM_Y> R = Eigen::Matrix<double, DIM_Y, DIM_Y>::Zero();
-  R(0, 0) = pose_cov[XYZRPY_COV_IDX::X_X];
-  R(0, 1) = pose_cov[XYZRPY_COV_IDX::X_Y];
-  R(1, 0) = pose_cov[XYZRPY_COV_IDX::Y_X];
-  R(1, 1) = pose_cov[XYZRPY_COV_IDX::Y_Y];
-  R(2, 2) = pose_cov[XYZRPY_COV_IDX::X_X];
-  R(2, 3) = pose_cov[XYZRPY_COV_IDX::X_Y];
-  R(3, 2) = pose_cov[XYZRPY_COV_IDX::Y_X];
-  R(3, 3) = pose_cov[XYZRPY_COV_IDX::Y_Y];
+  R.topLeftCorner<4, 4>() = axlePointCovFromPoseCov(pose_cov, cos_yaw, sin_yaw, lr, lf);
   R(4, 4) = twist_cov[XYZRPY_COV_IDX::X_X];
   R(5, 5) = twist_cov[XYZRPY_COV_IDX::Y_Y] * motion_params_.wheel_pos_ratio_sq;
 
