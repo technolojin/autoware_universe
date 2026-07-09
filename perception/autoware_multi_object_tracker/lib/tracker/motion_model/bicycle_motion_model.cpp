@@ -33,9 +33,9 @@ namespace autoware::multi_object_tracker
 // CTRV : Constant Turn Rate and constant Velocity
 using autoware_utils_geometry::xyzrpy_covariance_index::XYZRPY_COV_IDX;
 
-namespace
-{
-// Measurement covariance for the two-axle observation [x1, y1, x2, y2].
+// Measurement covariance for the two-axle observation [x1, y1, x2, y2]. Declared in the header and
+// exposed for unit testing (PSD invariant); kept as a free function since it depends only on the
+// pose covariance and geometry, not on filter state.
 //
 // The state carries the rear/front axle points and derives yaw geometrically as
 // atan2(Y2 - Y1, X2 - X1). A measurement supplies (x, y, yaw), mapped to the two points by
@@ -48,8 +48,16 @@ namespace
 // position confidence the rest of the pipeline relies on (e.g. covariance-tier merging) is
 // preserved:
 //   R = R_pos + (YAW_YAW - g^T R_pos g / |g|^4) * g g^T,   g = d[x1,y1,x2,y2]/d(yaw).
-// Along g the variance becomes YAW_YAW * |g|^2 (>= 0, so R stays PSD); every mode orthogonal to g
-// is unchanged. A small YAW_YAW therefore tightly and directly constrains heading.
+// Along g the variance becomes YAW_YAW * |g|^2 (>= 0). A small YAW_YAW therefore tightly and
+// directly constrains heading.
+//
+// PSD note: the rank-1 downdate above keeps R positive semi-definite only while |k| stays within
+// 1 / (g^T R_pos^{-1} g); the bound is reached with equality iff g is an eigenvector of R_pos,
+// i.e. the axle-point position covariance is aligned with the body lateral axis. Covariance
+// rotation, anisotropic detector covariances, and the wheel-anchor lateral-variance floor all
+// misalign it, so with a small modeled YAW_YAW the raw downdate can drive R non-PSD and, through
+// the EKF update, corrupt the state covariance (negative X_X/Y_Y - the "Covariance is not positive
+// semi-definite / not valid" warnings). We therefore clamp k to the PSD-preserving bound below.
 Eigen::Matrix4d axlePointCovFromPoseCov(
   const std::array<double, 36> & pose_cov, const double cos_yaw, const double sin_yaw,
   const double lr, const double lf)
@@ -83,11 +91,37 @@ Eigen::Matrix4d axlePointCovFromPoseCov(
   // position-confidence the pipeline relies on. It engages only when the channel supplies a yaw
   // covariance tighter than the position-implied one.
   const double g_r_g = g.dot(r_cov * g);
-  const double k = std::min(0.0, pose_cov[XYZRPY_COV_IDX::YAW_YAW] - g_r_g / (g2 * g2));
+  double k = std::min(0.0, pose_cov[XYZRPY_COV_IDX::YAW_YAW] - g_r_g / (g2 * g2));
+
+  // Clamp the downdate to the PSD-preserving bound (see PSD note above). R_pos = blockdiag(P, P)
+  // with P the 2x2 position block and g = [lr u, -lf u], u = (sin_yaw, -cos_yaw), so
+  //   g^T R_pos^{-1} g = (lr^2 + lf^2) * u^T P^{-1} u = g2 * u^T P^{-1} u,
+  // and R stays PSD iff k >= -1 / (g^T R_pos^{-1} g). A small margin keeps round-off from pushing R
+  // just past the boundary. This only caps the downdate when it would otherwise break PSD; whenever
+  // the tighten-only value is already valid (e.g. an isotropic position block, where u is an
+  // eigenvector of P), k is left untouched.
+  if (k < 0.0) {
+    const double det_p = p_xx * p_yy - p_xy * p_yx;
+    if (det_p > 1e-12) {
+      // u^T P^{-1} u with u = (sin_yaw, -cos_yaw) and P^{-1} = adj(P) / det_p.
+      const double u_pinv_u = (sin_yaw * sin_yaw * p_yy + sin_yaw * cos_yaw * (p_xy + p_yx) +
+                               cos_yaw * cos_yaw * p_xx) /
+                              det_p;
+      const double g_rinv_g = g2 * u_pinv_u;  // = g^T R_pos^{-1} g
+      if (g_rinv_g > 1e-12) {
+        constexpr double psd_margin = 1e-3;
+        k = std::max(k, -(1.0 - psd_margin) / g_rinv_g);
+      }
+    } else {
+      // Position block is not positive-definite (unexpected); skip the downdate rather than
+      // compound the problem.
+      k = 0.0;
+    }
+  }
+
   r_cov += k * g * g.transpose();
   return r_cov;
 }
-}  // namespace
 
 BicycleMotionModel::BicycleMotionModel() : logger_(rclcpp::get_logger("BicycleMotionModel"))
 {

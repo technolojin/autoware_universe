@@ -24,8 +24,18 @@
 #include <geometry_msgs/msg/twist.hpp>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 
+#include <array>
+
 namespace autoware::multi_object_tracker
 {
+
+// Measurement covariance for the two-axle observation [x1, y1, x2, y2], propagated from the pose
+// covariance (X_X, X_Y, Y_X, Y_Y, YAW_YAW) so the modeled yaw variance actually constrains heading.
+// Exposed for unit testing; see the definition for the derivation and the PSD guarantee. `cos_yaw`,
+// `sin_yaw` are the observation heading and `lr`, `lf` the rear/front axle distances.
+Eigen::Matrix4d axlePointCovFromPoseCov(
+  const std::array<double, 36> & pose_cov, const double cos_yaw, const double sin_yaw,
+  const double lr, const double lf);
 
 class BicycleMotionModel : public MotionModel<6>
 {
