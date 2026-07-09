@@ -259,6 +259,17 @@ geometry_msgs::msg::Point correctWheelAnchor(
   const double lateral_move =
     correctWheelAnchorLateral(lateral_offset, tracker_half, polygon_half, var_lat);
 
+  // Floor the lateral measurement variance to the face-center lateral ambiguity (~half the vehicle
+  // width). A partial cluster's visible-edge center can sit anywhere across the width, and since
+  // yaw is the axle-vector direction, that lateral error is otherwise levered over the wheelbase
+  // into a large heading swing - the dominant cause of stationary vehicles rotating while ego
+  // turns. Flooring the lateral variance keeps this edge update mostly longitudinal (face
+  // position / length), leaving heading to trusted-orientation detectors. Tune via the factor
+  // below if cluster-only heading convergence becomes too sluggish.
+  constexpr double kLateralAmbiguityFactor = 1.0;  // fraction of half-width used as lateral stddev
+  const double lat_std = kLateralAmbiguityFactor * tracker_half;
+  var_lat = std::max(var_lat, lat_std * lat_std);
+
   // Apply the scalar lateral move back along n to get the corrected anchor point.
   geometry_msgs::msg::Point corrected = anchor;
   corrected.x = anchor.x - lateral_move * sin_yaw;

@@ -161,7 +161,7 @@ public:
         // measurement noise model
         measurement_covariance.pos_x = sq(0.4);
         measurement_covariance.pos_y = sq(0.4);
-        measurement_covariance.yaw = sq(deg2rad(22.0));
+        measurement_covariance.yaw = sq(deg2rad(10.0));  // trusted-orientation yaw
         measurement_covariance.vel_long = sq(1.0);
         measurement_covariance.vel_lat = sq(kmph2mps(3.0));
 
@@ -207,7 +207,7 @@ public:
         // measurement noise model
         measurement_covariance.pos_x = sq(0.4);
         measurement_covariance.pos_y = sq(0.4);
-        measurement_covariance.yaw = sq(deg2rad(22.0));
+        measurement_covariance.yaw = sq(deg2rad(10.0));  // trusted-orientation yaw
         measurement_covariance.vel_long = sq(1.0);
         measurement_covariance.vel_lat = sq(kmph2mps(3.0));
 
@@ -253,7 +253,7 @@ public:
         // measurement noise model
         measurement_covariance.pos_x = sq(0.5);
         measurement_covariance.pos_y = sq(0.5);
-        measurement_covariance.yaw = sq(deg2rad(22.0));
+        measurement_covariance.yaw = sq(deg2rad(10.0));  // trusted-orientation yaw
         measurement_covariance.vel_long = sq(kmph2mps(10.0));
         measurement_covariance.vel_lat = sq(kmph2mps(3.0));
 
