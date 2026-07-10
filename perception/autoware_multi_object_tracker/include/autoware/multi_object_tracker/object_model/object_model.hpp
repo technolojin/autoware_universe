@@ -159,8 +159,8 @@ public:
         initial_covariance.vel_lat = sq(0.2);
 
         // measurement noise model
-        measurement_covariance.pos_x = sq(0.2);
-        measurement_covariance.pos_y = sq(0.2);
+        measurement_covariance.pos_x = sq(0.4);
+        measurement_covariance.pos_y = sq(0.4);
         measurement_covariance.yaw = sq(deg2rad(22.0));
         measurement_covariance.vel_long = sq(1.0);
         measurement_covariance.vel_lat = sq(kmph2mps(3.0));
@@ -205,8 +205,8 @@ public:
         initial_covariance.vel_lat = sq(0.2);
 
         // measurement noise model
-        measurement_covariance.pos_x = sq(0.2);
-        measurement_covariance.pos_y = sq(0.2);
+        measurement_covariance.pos_x = sq(0.4);
+        measurement_covariance.pos_y = sq(0.4);
         measurement_covariance.yaw = sq(deg2rad(22.0));
         measurement_covariance.vel_long = sq(1.0);
         measurement_covariance.vel_lat = sq(kmph2mps(3.0));
@@ -251,8 +251,8 @@ public:
         initial_covariance.vel_lat = sq(0.2);
 
         // measurement noise model
-        measurement_covariance.pos_x = sq(0.2);
-        measurement_covariance.pos_y = sq(0.2);
+        measurement_covariance.pos_x = sq(0.5);
+        measurement_covariance.pos_y = sq(0.5);
         measurement_covariance.yaw = sq(deg2rad(22.0));
         measurement_covariance.vel_long = sq(kmph2mps(10.0));
         measurement_covariance.vel_lat = sq(kmph2mps(3.0));
@@ -297,8 +297,8 @@ public:
         initial_covariance.vel_lat = sq(0.2);
 
         // measurement noise model
-        measurement_covariance.pos_x = sq(0.2);
-        measurement_covariance.pos_y = sq(0.2);
+        measurement_covariance.pos_x = sq(0.4);
+        measurement_covariance.pos_y = sq(0.4);
         measurement_covariance.yaw = sq(deg2rad(30.0));
         measurement_covariance.vel_long = sq(kmph2mps(10.0));
         measurement_covariance.vel_lat = sq(kmph2mps(3.0));
@@ -343,8 +343,8 @@ public:
         initial_covariance.yaw_rate = sq(deg2rad(360.0));
 
         // measurement noise model
-        measurement_covariance.pos_x = sq(0.2);
-        measurement_covariance.pos_y = sq(0.2);
+        measurement_covariance.pos_x = sq(0.4);
+        measurement_covariance.pos_y = sq(0.4);
         measurement_covariance.yaw = sq(deg2rad(30.0));
         measurement_covariance.vel_long = sq(kmph2mps(5.0));
         measurement_covariance.vel_lat = sq(kmph2mps(3.0));
