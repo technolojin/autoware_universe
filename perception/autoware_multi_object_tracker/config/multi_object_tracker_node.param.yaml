@@ -21,9 +21,14 @@
     # odometry covariance is used; these values seed the ego_source: tf path (and the odometry
     # buffer-miss fallback), where the TF lookup carries no covariance.
     localization_error:
-      pos_stddev_x: 0.3    # [m] ego position stddev along map x
-      pos_stddev_y: 0.3    # [m] ego position stddev along map y
-      yaw_stddev: 0.017    # [rad] ego heading stddev (~1 deg)
+      pos_stddev_x: 0.3      # [m] ego position stddev along map x
+      pos_stddev_y: 0.3      # [m] ego position stddev along map y
+      yaw_stddev: 0.017      # [rad] ego heading stddev (~1 deg)
+      # Correlation time [s] over which the ego pose covariance is leaked into the tracked-object
+      # position process noise during prediction. Per-step contribution scales with dt/this value;
+      # the yaw term projects to a lateral error growing with range (0 as the ego reaches the
+      # object). Non-positive disables the prediction-side pose term.
+      correlation_time: 1.0
 
     # Per-tracker-type configuration
     tracker_configs:

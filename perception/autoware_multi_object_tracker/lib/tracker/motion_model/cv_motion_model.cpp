@@ -210,8 +210,8 @@ bool CVMotionModel::predictStateStep(const double dt, KalmanFilter & ekf) const
   Q(IDX::VX, IDX::VX) = motion_params_.q_cov_vx * dt * dt;
   Q(IDX::VY, IDX::VY) = motion_params_.q_cov_vy * dt * dt;
 
-  // Ego localization drift adds map-frame position process noise (no-op if unset).
-  addOdometryProcessNoise(Q, dt, {{IDX::X, IDX::Y}});
+  // Ego localization error adds range-projected, dt-scaled position process noise (no-op if unset).
+  addOdometryProcessNoise(Q, dt, {{IDX::X, IDX::Y}}, X_t);
 
   // control-input model B and control-input u are not used
   // Eigen::MatrixXd B = Eigen::MatrixXd::Zero(DIM, DIM);

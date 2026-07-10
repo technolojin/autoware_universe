@@ -38,10 +38,10 @@ public:
   }
 
   bool predict(const rclcpp::Time & time) override;
-  void setOdometryVelocityCovariance(const Eigen::Matrix2d & cov_map) override
+  void setEgoUncertainty(const EgoUncertainty & ego_unc) override
   {
-    pedestrian_tracker_.setOdometryVelocityCovariance(cov_map);
-    bicycle_tracker_.setOdometryVelocityCovariance(cov_map);
+    pedestrian_tracker_.setEgoUncertainty(ego_unc);
+    bicycle_tracker_.setEgoUncertainty(ego_unc);
   }
   bool measure(
     const types::DynamicObject & object, const rclcpp::Time & time,

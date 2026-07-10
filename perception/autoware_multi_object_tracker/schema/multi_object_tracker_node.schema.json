@@ -113,9 +113,15 @@
           "minimum": 0.0,
           "description": "Ego heading stddev [rad].",
           "default": 0.017
+        },
+        "correlation_time": {
+          "type": "number",
+          "minimum": 0.0,
+          "description": "Correlation time [s] over which the ego pose covariance is leaked into the tracked-object position process noise during prediction (per-step contribution scales with dt/correlation_time). Non-positive disables the prediction-side pose term.",
+          "default": 1.0
         }
       },
-      "required": ["pos_stddev_x", "pos_stddev_y", "yaw_stddev"]
+      "required": ["pos_stddev_x", "pos_stddev_y", "yaw_stddev", "correlation_time"]
     },
     "tracker_configs": {
       "type": "object",

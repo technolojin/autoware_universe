@@ -16,6 +16,9 @@
 
 #include "autoware/multi_object_tracker/uncertainty/uncertainty_processor.hpp"
 
+#include <Eigen/Core>
+#include <Eigen/Geometry>
+
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 
 #include <tf2/LinearMath/Quaternion.h>
@@ -419,6 +422,41 @@ std::optional<nav_msgs::msg::Odometry> Odometry::getOdometryFromTf(const rclcpp:
   }
 
   return std::optional<nav_msgs::msg::Odometry>(odometry);
+}
+
+EgoUncertainty Odometry::getEgoUncertainty(const rclcpp::Time & time) const
+{
+  EgoUncertainty ego_unc;  // zero => prediction-side injection is a no-op
+  if (!enable_odometry_uncertainty_) {
+    return ego_unc;
+  }
+  const auto odometry = getOdometryFromTf(time);
+  if (!odometry) {
+    return ego_unc;
+  }
+
+  const auto & pose = odometry->pose.pose;
+  const auto & pose_cov = odometry->pose.covariance;    // world/map frame
+  const auto & twist_cov = odometry->twist.covariance;  // ego body frame
+
+  ego_unc.ego_x = pose.position.x;
+  ego_unc.ego_y = pose.position.y;
+
+  // ego position covariance is already expressed in the map frame
+  ego_unc.pos_cov << pose_cov[0], pose_cov[1], pose_cov[6], pose_cov[7];
+  ego_unc.yaw_var = pose_cov[35];
+
+  // ego velocity covariance is body-frame; rotate it into the map frame by the ego yaw
+  const double ego_yaw = tf2::getYaw(pose.orientation);
+  Eigen::Matrix2d vel_cov_body;
+  vel_cov_body << twist_cov[0], twist_cov[1], twist_cov[6], twist_cov[7];
+  const Eigen::Matrix2d rot = Eigen::Rotation2Dd(ego_yaw).toRotationMatrix();
+  ego_unc.vel_cov = rot * vel_cov_body * rot.transpose();
+
+  const double tau = localization_error_.correlation_time;
+  ego_unc.inv_correlation_time = tau > 0.0 ? 1.0 / tau : 0.0;
+
+  return ego_unc;
 }
 
 std::optional<types::DynamicObjectList> Odometry::transformObjects(

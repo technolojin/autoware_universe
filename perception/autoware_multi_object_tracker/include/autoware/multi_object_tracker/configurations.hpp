@@ -93,6 +93,10 @@ struct LocalizationErrorModel
   double pos_stddev_x{0.3};  // [m] ego position stddev along map x
   double pos_stddev_y{0.3};  // [m] ego position stddev along map y
   double yaw_stddev{0.017};  // [rad] ego heading stddev (~1 deg)
+  // Correlation time [s] over which the ego pose covariance is leaked into the tracked-object
+  // position process noise during prediction (per-step contribution scales with dt / correlation
+  // time). Larger => slower injection. Non-positive disables the prediction-side pose term.
+  double correlation_time{1.0};
 };
 
 struct TrackerConfigs

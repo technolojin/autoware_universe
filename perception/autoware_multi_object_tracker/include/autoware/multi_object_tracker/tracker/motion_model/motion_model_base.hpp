@@ -16,6 +16,7 @@
 #define AUTOWARE__MULTI_OBJECT_TRACKER__TRACKER__MOTION_MODEL__MOTION_MODEL_BASE_HPP_
 
 #include "autoware/multi_object_tracker/kalman_filter_template.hpp"
+#include "autoware/multi_object_tracker/tracker/motion_model/ego_uncertainty.hpp"
 
 #include <Eigen/Core>
 #include <rclcpp/rclcpp.hpp>
@@ -24,6 +25,7 @@
 #include <geometry_msgs/msg/twist.hpp>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 
+#include <cmath>
 #include <initializer_list>
 #include <utility>
 
@@ -32,6 +34,16 @@ namespace autoware::multi_object_tracker
 template <int StateSize, int MeasurementSize = 2>
 class MotionModel
 {
+public:
+  // Type aliases for convenience (declared first so protected helpers can use them).
+  using KalmanFilter = KalmanFilterTemplate<StateSize, MeasurementSize>;
+  using StateVec = typename KalmanFilter::StateVec;
+  using StateMat = typename KalmanFilter::StateMat;
+  using MeasVec = typename KalmanFilter::MeasVec;
+  using MeasMat = typename KalmanFilter::MeasMat;
+  using ProcessMat = typename KalmanFilter::ProcessMat;
+  using MeasModelMat = typename KalmanFilter::MeasModelMat;
+
 private:
   bool is_initialized_{false};
   double dt_max_{0.11};  // [s] maximum time interval for prediction
@@ -52,22 +64,51 @@ protected:
     return q;
   }()};
 
-  // Ego-odometry velocity covariance in the map frame [m^2/s^2]. Between measurement updates the
-  // ego localization drifts at a rate bounded by the ego velocity uncertainty, so each tracked
-  // position accumulates map-frame process noise. Set per prediction cycle; zero by default, which
-  // makes addOdometryProcessNoise() a no-op (backward compatible).
-  Eigen::Matrix2d odom_vel_cov_map_{Eigen::Matrix2d::Zero()};
+  // Per-cycle ego (localization) uncertainty in the map frame, projected into the position process
+  // noise during prediction. Set per cycle; a zero (default) bundle makes addOdometryProcessNoise()
+  // a no-op (backward compatible when odometry uncertainty is disabled).
+  EgoUncertainty ego_unc_{};
 
-  // Add the ego-odometry-driven position process noise (odom_vel_cov_map_ * dt^2) to Q. For
-  // multi-point states (e.g. the bicycle's two axle points) the same noise is applied common-mode
-  // across every point pair, i.e. a pure rigid translation that adds no spurious relative
-  // (length/yaw) uncertainty. `pos_indices` lists the (x, y) state indices of each position point.
+  // Add the ego-localization-driven position process noise to Q. For the object at range r and
+  // bearing theta from the ego (t_hat = tangential unit, perpendicular to the line of sight):
+  //   dQ_pos(dt, r) = (dt / tau) * [ pos_cov + yaw_var * r^2 * t_hat t_hat^T ]   (ego POSE error)
+  //                 +  dt^2      *   vel_cov                                     (ego MOTION)
+  // Both contributions are functions of dt and vanish at dt = 0; the yaw-lever term also vanishes
+  // at r = 0. The representative range is taken at the centroid of the position points, and the
+  // resulting 2x2 is applied common-mode across every point pair, i.e. a pure rigid translation
+  // that adds no spurious relative (length/yaw) noise. `pos_indices` lists the (x, y) state indices
+  // of each position point; `X` is the current state (source of each point's world position).
   void addOdometryProcessNoise(
-    StateMat & Q, const double dt,
-    std::initializer_list<std::pair<int, int>> pos_indices) const
+    StateMat & Q, const double dt, std::initializer_list<std::pair<int, int>> pos_indices,
+    const StateVec & X) const
   {
-    if (odom_vel_cov_map_.isZero()) return;
-    const Eigen::Matrix2d cov = odom_vel_cov_map_ * dt * dt;
+    if (ego_unc_.isZero()) return;
+
+    // representative object position = centroid of the position points (rigid-body center)
+    double obj_x = 0.0;
+    double obj_y = 0.0;
+    for (const auto & [xi, yi] : pos_indices) {
+      obj_x += X(xi);
+      obj_y += X(yi);
+    }
+    const auto num_points = static_cast<double>(pos_indices.size());
+    obj_x /= num_points;
+    obj_y /= num_points;
+
+    const double dx = obj_x - ego_unc_.ego_x;
+    const double dy = obj_y - ego_unc_.ego_y;
+    const double r2 = dx * dx + dy * dy;
+
+    // ego pose error projected through the lever arm, leaked into Q at the rate dt / tau
+    Eigen::Matrix2d pose_proj = ego_unc_.pos_cov;
+    if (r2 > 1e-12) {
+      const double r = std::sqrt(r2);
+      const Eigen::Vector2d t_hat(-dy / r, dx / r);  // tangential, perpendicular to line of sight
+      pose_proj += ego_unc_.yaw_var * r2 * (t_hat * t_hat.transpose());
+    }
+    Eigen::Matrix2d cov = (dt * ego_unc_.inv_correlation_time) * pose_proj;  // ego POSE error
+    cov += (dt * dt) * ego_unc_.vel_cov;                                     // ego MOTION
+
     for (const auto & [ax, ay] : pos_indices) {
       for (const auto & [bx, by] : pos_indices) {
         Q(ax, bx) += cov(0, 0);
@@ -84,23 +125,9 @@ public:
   void setOrientation(const geometry_msgs::msg::Quaternion & q) noexcept { orientation_ = q; }
   double getZ() const noexcept { return z_; }
   const geometry_msgs::msg::Quaternion & getOrientation() const noexcept { return orientation_; }
-  // Ego-odometry velocity covariance (map frame) used as position process noise during prediction.
-  void setOdometryVelocityCovariance(const Eigen::Matrix2d & cov_map) noexcept
-  {
-    odom_vel_cov_map_ = cov_map;
-  }
-  const Eigen::Matrix2d & getOdometryVelocityCovariance() const noexcept
-  {
-    return odom_vel_cov_map_;
-  }
-  // Add these type aliases for convenience
-  using KalmanFilter = KalmanFilterTemplate<StateSize, MeasurementSize>;
-  using StateVec = typename KalmanFilter::StateVec;
-  using StateMat = typename KalmanFilter::StateMat;
-  using MeasVec = typename KalmanFilter::MeasVec;
-  using MeasMat = typename KalmanFilter::MeasMat;
-  using ProcessMat = typename KalmanFilter::ProcessMat;
-  using MeasModelMat = typename KalmanFilter::MeasModelMat;
+  // Ego (localization) uncertainty used to grow position process noise during prediction.
+  void setEgoUncertainty(const EgoUncertainty & ego_unc) noexcept { ego_unc_ = ego_unc; }
+  const EgoUncertainty & getEgoUncertainty() const noexcept { return ego_unc_; }
 
   MotionModel() : last_update_time_(rclcpp::Time(0, 0)) {}
   virtual ~MotionModel() = default;

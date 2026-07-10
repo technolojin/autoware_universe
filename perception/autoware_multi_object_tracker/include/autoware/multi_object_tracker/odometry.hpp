@@ -16,6 +16,7 @@
 #define AUTOWARE__MULTI_OBJECT_TRACKER__ODOMETRY_HPP_
 
 #include "autoware/multi_object_tracker/configurations.hpp"
+#include "autoware/multi_object_tracker/tracker/motion_model/ego_uncertainty.hpp"
 #include "autoware/multi_object_tracker/types.hpp"
 
 #include <autoware/agnocast_wrapper/node.hpp>
@@ -74,6 +75,11 @@ public:
   std::optional<geometry_msgs::msg::Transform> getTransform(const rclcpp::Time & time) const;
 
   std::optional<nav_msgs::msg::Odometry> getOdometryFromTf(const rclcpp::Time & time) const;
+
+  /// Per-cycle ego (localization) uncertainty in the map frame, used to grow tracked-object
+  /// position process noise during prediction. Returns a zero (no-op) bundle when odometry
+  /// uncertainty is disabled or no ego pose is available at `time`.
+  EgoUncertainty getEgoUncertainty(const rclcpp::Time & time) const;
 
   std::optional<types::DynamicObjectList> transformObjects(
     const types::DynamicObjectList & input_objects) const;

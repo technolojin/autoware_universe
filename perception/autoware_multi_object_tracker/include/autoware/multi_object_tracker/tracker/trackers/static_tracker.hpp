@@ -44,9 +44,9 @@ public:
   // setEgoPose() is handled by the base via getShapeModel().setEgoPose().
 
   bool predict(const rclcpp::Time & time) override;
-  void setOdometryVelocityCovariance(const Eigen::Matrix2d & cov_map) override
+  void setEgoUncertainty(const EgoUncertainty & ego_unc) override
   {
-    motion_model_.setOdometryVelocityCovariance(cov_map);
+    motion_model_.setEgoUncertainty(ego_unc);
   }
   bool measure(
     const types::DynamicObject & object, const rclcpp::Time & time,

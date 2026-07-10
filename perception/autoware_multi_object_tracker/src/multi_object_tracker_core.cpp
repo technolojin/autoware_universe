@@ -14,10 +14,7 @@
 
 #include "multi_object_tracker_core.hpp"
 
-#include <Eigen/Core>
-#include <Eigen/Geometry>
 #include <autoware/agnocast_wrapper/tf2.hpp>
-#include <tf2/utils.hpp>
 
 #include <functional>
 #include <memory>
@@ -73,24 +70,6 @@ std::optional<geometry_msgs::msg::PoseStamped> getEgoPoseAt(
     return ps;
   }
   return std::nullopt;
-}
-
-// Ego velocity covariance rotated from the ego body frame into the map frame [m^2/s^2]. Fed to the
-// trackers as position process noise so prediction grows with ego localization drift. Returns zero
-// (no effect) when odometry uncertainty is disabled or no odometry is available.
-Eigen::Matrix2d getEgoVelocityCovarianceMap(
-  const rclcpp::Time & time, const MultiObjectTrackerInternalState & state)
-{
-  if (!state.odometry->enable_odometry_uncertainty_) return Eigen::Matrix2d::Zero();
-  const auto odometry_info = state.odometry->getOdometryFromTf(time);
-  if (!odometry_info) return Eigen::Matrix2d::Zero();
-
-  const auto & twist_cov = odometry_info->twist.covariance;
-  Eigen::Matrix2d cov_body;
-  cov_body << twist_cov[0], twist_cov[1], twist_cov[6], twist_cov[7];  // [vx-vx, vx-vy; vy-vx, vy-vy]
-  const double ego_yaw = tf2::getYaw(odometry_info->pose.pose.orientation);
-  const Eigen::Matrix2d rot = Eigen::Rotation2Dd(ego_yaw).toRotationMatrix();
-  return rot * cov_body * rot.transpose();
 }
 }  // namespace
 
@@ -246,10 +225,10 @@ void process_objects_(
   }
   state.processor->updateEgoPose(ego_pose_stamped);
 
-  /// 1. Update ego pose and predict trackers to measurement time. The ego-odometry velocity
-  /// covariance is injected as position process noise so prediction grows with localization drift.
-  const auto ego_vel_cov_map = getEgoVelocityCovarianceMap(measurement_time, state);
-  state.processor->predictTrackers(measurement_time, ego_vel_cov_map);
+  /// 1. Update ego pose and predict trackers to measurement time. The ego (localization)
+  /// uncertainty is injected as position process noise so prediction grows with localization error.
+  const auto ego_unc = state.odometry->getEgoUncertainty(measurement_time);
+  state.processor->predictTrackers(measurement_time, ego_unc);
 
   /// 2. Object association
   const types::AssociatedObjects associated_objects{

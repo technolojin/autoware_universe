@@ -65,6 +65,8 @@ MultiObjectTracker::MultiObjectTracker(const rclcpp::NodeOptions & node_options)
     declare_parameter<double>("localization_error.pos_stddev_y");
   params_.localization_error.yaw_stddev =
     declare_parameter<double>("localization_error.yaw_stddev");
+  params_.localization_error.correlation_time =
+    declare_parameter<double>("localization_error.correlation_time");
   params_.ego_source = toEgoSource(declare_parameter<std::string>("ego_source"));
   // publish-trigger side: false publishes on measurement, true publishes from the periodic timer
   params_.publish_on_timer = declare_parameter<bool>("publish_on_timer");

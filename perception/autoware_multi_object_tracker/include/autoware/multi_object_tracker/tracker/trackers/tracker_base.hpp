@@ -20,6 +20,7 @@
 #include "autoware/multi_object_tracker/object_model/classes.hpp"
 #include "autoware/multi_object_tracker/object_model/object_model.hpp"
 #include "autoware/multi_object_tracker/object_model/uuid.hpp"
+#include "autoware/multi_object_tracker/tracker/motion_model/ego_uncertainty.hpp"
 #include "autoware/multi_object_tracker/tracker/shape_model/shape_model_base.hpp"
 #include "autoware/multi_object_tracker/tracker/shape_model/unstable_shape_filter.hpp"
 #include "autoware/multi_object_tracker/types.hpp"
@@ -281,10 +282,10 @@ public:
     getShapeModel().setEgoPose(ego_pos);
   }
 
-  // Supply the ego-odometry velocity covariance (map frame) used as position process noise in the
+  // Supply the per-cycle ego (localization) uncertainty used to grow position process noise in the
   // next prediction. Leaf trackers forward it to their motion model(s); composite trackers forward
   // to every inner tracker. Base default is a no-op.
-  virtual void setOdometryVelocityCovariance(const Eigen::Matrix2d & cov_map) { (void)cov_map; }
+  virtual void setEgoUncertainty(const EgoUncertainty & ego_unc) { (void)ego_unc; }
 
   virtual void setOrientationAvailability(
     const types::OrientationAvailability & orientation_availability)
