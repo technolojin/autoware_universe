@@ -48,6 +48,7 @@ struct MultiObjectTrackerParameters
   std::string world_frame_id;
   std::string ego_frame_id;
   bool enable_odometry_uncertainty;
+  LocalizationErrorModel localization_error;
   bool publish_processing_time_detail;
   bool publish_merged_objects;
 

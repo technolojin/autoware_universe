@@ -59,6 +59,12 @@ MultiObjectTracker::MultiObjectTracker(const rclcpp::NodeOptions & node_options)
   params_.world_frame_id = declare_parameter<std::string>("world_frame_id");
   params_.ego_frame_id = declare_parameter<std::string>("ego_frame_id");
   params_.enable_odometry_uncertainty = declare_parameter<bool>("consider_odometry_uncertainty");
+  params_.localization_error.pos_stddev_x =
+    declare_parameter<double>("localization_error.pos_stddev_x");
+  params_.localization_error.pos_stddev_y =
+    declare_parameter<double>("localization_error.pos_stddev_y");
+  params_.localization_error.yaw_stddev =
+    declare_parameter<double>("localization_error.yaw_stddev");
   params_.ego_source = toEgoSource(declare_parameter<std::string>("ego_source"));
   // publish-trigger side: false publishes on measurement, true publishes from the periodic timer
   params_.publish_on_timer = declare_parameter<bool>("publish_on_timer");

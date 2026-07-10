@@ -82,6 +82,19 @@ struct StaticTrackerConfig
   bool convert_polygon_to_bbox{false};
 };
 
+//// Localization (ego-pose) error model.
+//// A plain TF lookup carries no covariance, so the ego pose it yields is treated as exact. This
+//// model supplies the ego-pose uncertainty for the TF ego-source path (and the odometry-source
+//// buffer-miss fallback), which addOdometryUncertainty() folds into each detection's measurement
+//// covariance R. The heading term is what stops the strong bicycle motion model from turning an
+//// unmodeled ego-heading error into a persistent wrong object yaw. Values are 1-sigma stddevs.
+struct LocalizationErrorModel
+{
+  double pos_stddev_x{0.3};  // [m] ego position stddev along map x
+  double pos_stddev_y{0.3};  // [m] ego position stddev along map y
+  double yaw_stddev{0.017};  // [rad] ego heading stddev (~1 deg)
+};
+
 struct TrackerConfigs
 {
   PolygonTrackerConfig polygon_tracker;

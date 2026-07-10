@@ -15,6 +15,7 @@
 #ifndef AUTOWARE__MULTI_OBJECT_TRACKER__ODOMETRY_HPP_
 #define AUTOWARE__MULTI_OBJECT_TRACKER__ODOMETRY_HPP_
 
+#include "autoware/multi_object_tracker/configurations.hpp"
 #include "autoware/multi_object_tracker/types.hpp"
 
 #include <autoware/agnocast_wrapper/node.hpp>
@@ -60,7 +61,8 @@ public:
     rclcpp::Logger logger, rclcpp::Clock::SharedPtr clock,
     std::shared_ptr<autoware::agnocast_wrapper::Buffer> tf_buffer,
     const std::string & world_frame_id, const std::string & ego_frame_id,
-    bool enable_odometry_uncertainty = false, EgoSource ego_source = EgoSource::TF);
+    bool enable_odometry_uncertainty = false, EgoSource ego_source = EgoSource::TF,
+    const LocalizationErrorModel & localization_error = LocalizationErrorModel{});
 
   /// Feed a new odometry sample (world <- ego) into the interpolation buffer.
   void updateOdometryBuffer(const nav_msgs::msg::Odometry & odometry);
@@ -87,6 +89,8 @@ private:
   autoware::agnocast_wrapper::TransformListener tf_listener_;
   // ego source
   EgoSource ego_source_;
+  // ego-pose (localization) error model, used to fabricate the TF-source odometry covariance
+  LocalizationErrorModel localization_error_;
 
 public:
   bool enable_odometry_uncertainty_ = false;

@@ -146,7 +146,8 @@ DelayReference toDelayReference(const std::string & name)
 Odometry::Odometry(
   rclcpp::Logger logger, rclcpp::Clock::SharedPtr clock,
   std::shared_ptr<autoware::agnocast_wrapper::Buffer> tf_buffer, const std::string & world_frame_id,
-  const std::string & ego_frame_id, bool enable_odometry_uncertainty, EgoSource ego_source)
+  const std::string & ego_frame_id, bool enable_odometry_uncertainty, EgoSource ego_source,
+  const LocalizationErrorModel & localization_error)
 : logger_(logger),
   clock_(clock),
   ego_frame_id_(ego_frame_id),
@@ -154,6 +155,7 @@ Odometry::Odometry(
   tf_buffer_(tf_buffer),
   tf_listener_(*tf_buffer_),
   ego_source_(ego_source),
+  localization_error_(localization_error),
   enable_odometry_uncertainty_(enable_odometry_uncertainty)
 {
 }
@@ -399,11 +401,16 @@ std::optional<nav_msgs::msg::Odometry> Odometry::getOdometryFromTf(const rclcpp:
     odom_twist.linear.y = 0.1;   // m/s
     odom_twist.angular.z = 0.1;  // rad/s
 
-    // model the uncertainty
+    // model the ego-pose uncertainty from the localization error model (variance = stddev^2).
+    // TF carries no covariance, so this is the only place the ego-pose error enters R; the yaw
+    // term is what keeps a localization heading error from becoming a persistent wrong object yaw.
     auto & odom_pose_cov = odometry.pose.covariance;
-    odom_pose_cov[0] = 0.1;      // x-x
-    odom_pose_cov[7] = 0.1;      // y-y
-    odom_pose_cov[35] = 0.0001;  // yaw-yaw
+    odom_pose_cov[0] =  // x-x
+      localization_error_.pos_stddev_x * localization_error_.pos_stddev_x;
+    odom_pose_cov[7] =  // y-y
+      localization_error_.pos_stddev_y * localization_error_.pos_stddev_y;
+    odom_pose_cov[35] =  // yaw-yaw
+      localization_error_.yaw_stddev * localization_error_.yaw_stddev;
 
     auto & odom_twist_cov = odometry.twist.covariance;
     odom_twist_cov[0] = 2.0;     // x-x [m^2/s^2]

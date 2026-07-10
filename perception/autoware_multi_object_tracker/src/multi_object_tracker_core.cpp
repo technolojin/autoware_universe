@@ -40,7 +40,7 @@ void MultiObjectTrackerInternalState::init(
   auto tf_buffer = std::make_shared<autoware::agnocast_wrapper::Buffer>(node.get_clock());
   odometry = std::make_shared<Odometry>(
     node.get_logger(), node.get_clock(), tf_buffer, params.world_frame_id, params.ego_frame_id,
-    params.enable_odometry_uncertainty, params.ego_source);
+    params.enable_odometry_uncertainty, params.ego_source, params.localization_error);
 
   // Initialize input manager
   input_manager = std::make_unique<InputManager>(odometry, node.get_logger(), node.get_clock());

@@ -16,6 +16,15 @@
 
     consider_odometry_uncertainty: false
 
+    # Ego-pose (localization) error model, 1-sigma. Folded into each detection's measurement
+    # covariance when consider_odometry_uncertainty is true. For ego_source: odometry the real
+    # odometry covariance is used; these values seed the ego_source: tf path (and the odometry
+    # buffer-miss fallback), where the TF lookup carries no covariance.
+    localization_error:
+      pos_stddev_x: 0.3    # [m] ego position stddev along map x
+      pos_stddev_y: 0.3    # [m] ego position stddev along map y
+      yaw_stddev: 0.017    # [rad] ego heading stddev (~1 deg)
+
     # Per-tracker-type configuration
     tracker_configs:
       polygon_tracker:
