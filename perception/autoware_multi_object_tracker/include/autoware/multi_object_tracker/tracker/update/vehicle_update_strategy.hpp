@@ -50,9 +50,13 @@ double correctWheelAnchorLateral(
   double & var_lat);
 
 // Laterally corrects the anchor against `prediction` and folds the extra variance into `pose_cov`.
+// `lateral_var_floor` [m^2] lower-bounds the injected body-lateral variance so a partial cluster
+// edge cannot lever the wheel-anchor update into yaw (the width-mismatch term alone vanishes when
+// the polygon and tracker widths coincide).
 geometry_msgs::msg::Point correctWheelAnchor(
   const types::DynamicObject & prediction, const double polygon_width,
-  const geometry_msgs::msg::Point & anchor, std::array<double, 36> & pose_cov);
+  const geometry_msgs::msg::Point & anchor, const double lateral_var_floor,
+  std::array<double, 36> & pose_cov);
 
 }  // namespace autoware::multi_object_tracker
 

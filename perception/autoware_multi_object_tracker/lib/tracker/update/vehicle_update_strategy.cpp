@@ -238,7 +238,8 @@ double correctWheelAnchorLateral(
 
 geometry_msgs::msg::Point correctWheelAnchor(
   const types::DynamicObject & prediction, const double polygon_width,
-  const geometry_msgs::msg::Point & anchor, std::array<double, 36> & pose_cov)
+  const geometry_msgs::msg::Point & anchor, const double lateral_var_floor,
+  std::array<double, 36> & pose_cov)
 {
   using autoware_utils_geometry::xyzrpy_covariance_index::XYZRPY_COV_IDX;
 
@@ -258,6 +259,11 @@ geometry_msgs::msg::Point correctWheelAnchor(
   double var_lat = 0.0;
   const double lateral_move =
     correctWheelAnchorLateral(lateral_offset, tracker_half, polygon_half, var_lat);
+
+  // A partial cluster's edge face-center is reliable longitudinally (it pins the vehicle end /
+  // length) but weak laterally; the wheel-base lever turns any lateral error into yaw. Lower-bound
+  // the lateral variance so the update stays (near-)longitudinal and cannot spin a stopped box.
+  var_lat = std::max(var_lat, lateral_var_floor);
 
   // Apply the scalar lateral move back along n to get the corrected anchor point.
   geometry_msgs::msg::Point corrected = anchor;

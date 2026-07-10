@@ -118,4 +118,77 @@ TEST(CorrectWheelAnchorLateral, SignSymmetry)
   EXPECT_DOUBLE_EQ(pos.var_lat, neg.var_lat);
 }
 
+// --- correctWheelAnchor: the injected lateral variance floor ---------------------------------
+namespace
+{
+// Flattened 6x6 pose covariance indices used by correctWheelAnchor.
+constexpr int COV_XX = 0;          // (0,0)
+constexpr int COV_XY = 1;          // (0,1)
+constexpr int COV_YY = 7;          // (1,1)
+constexpr double kInitVar = 0.04;  // isotropic base position variance, sq(0.2)
+
+// Builds a tracker-frame prediction box and runs correctWheelAnchor, returning the modified
+// covariance x/y block. yaw sets the body frame; the floor is injected along the body-lateral axis.
+struct AnchorResult
+{
+  std::array<double, 36> pose_cov;
+  geometry_msgs::msg::Point anchor;
+};
+
+AnchorResult runAnchor(
+  double yaw, double tracker_width, double polygon_width, double anchor_x, double anchor_y,
+  double lateral_var_floor)
+{
+  types::DynamicObject prediction;
+  prediction.pose.position.x = 0.0;
+  prediction.pose.position.y = 0.0;
+  prediction.pose.position.z = 0.0;
+  prediction.pose.orientation.x = 0.0;
+  prediction.pose.orientation.y = 0.0;
+  prediction.pose.orientation.z = std::sin(yaw * 0.5);
+  prediction.pose.orientation.w = std::cos(yaw * 0.5);
+  prediction.shape.dimensions.y = tracker_width;
+
+  geometry_msgs::msg::Point anchor;
+  anchor.x = anchor_x;
+  anchor.y = anchor_y;
+
+  std::array<double, 36> pose_cov{};
+  pose_cov[COV_XX] = kInitVar;
+  pose_cov[COV_YY] = kInitVar;
+
+  const auto corrected =
+    correctWheelAnchor(prediction, polygon_width, anchor, lateral_var_floor, pose_cov);
+  return {pose_cov, corrected};
+}
+}  // namespace
+
+// Widths match, so the width-mismatch term is zero; the floor alone is injected, and (yaw=0) it
+// lands entirely on the world-y (body-lateral) variance, leaving the longitudinal x untouched.
+TEST(CorrectWheelAnchor, FloorInjectedIntoBodyLateralYawZero)
+{
+  const auto r = runAnchor(0.0, 2.0, 2.0, /*anchor*/ 3.0, 0.0, /*floor*/ 5.0);
+  EXPECT_DOUBLE_EQ(r.pose_cov[COV_XX], kInitVar);        // longitudinal stays tight
+  EXPECT_DOUBLE_EQ(r.pose_cov[COV_YY], kInitVar + 5.0);  // lateral inflated by the floor
+  EXPECT_NEAR(r.pose_cov[COV_XY], 0.0, 1e-12);
+}
+
+// The floor is a lower bound: when the width-mismatch variance (here 1.0) exceeds the floor, it is
+// preserved rather than reduced.
+TEST(CorrectWheelAnchor, FloorDoesNotReduceWidthMismatchVariance)
+{
+  const auto r = runAnchor(0.0, 2.0, 4.0, /*anchor*/ 3.0, 0.0, /*floor*/ 0.25);
+  EXPECT_DOUBLE_EQ(r.pose_cov[COV_YY], kInitVar + 1.0);  // dead-zone var 1.0 > floor 0.25
+}
+
+// The anisotropy is expressed in the body frame: at yaw=90 deg the lateral axis is world-x, so the
+// floor inflates x and leaves y untouched.
+TEST(CorrectWheelAnchor, FloorFollowsBodyFrameYaw90)
+{
+  const auto r = runAnchor(M_PI_2, 2.0, 2.0, /*anchor along body-long*/ 0.0, 3.0, /*floor*/ 5.0);
+  EXPECT_DOUBLE_EQ(r.pose_cov[COV_XX], kInitVar + 5.0);
+  EXPECT_DOUBLE_EQ(r.pose_cov[COV_YY], kInitVar);
+  EXPECT_NEAR(r.pose_cov[COV_XY], 0.0, 1e-12);
+}
+
 }  // namespace autoware::multi_object_tracker

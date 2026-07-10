@@ -211,8 +211,28 @@ bool VehicleTracker::updateWheelKinematics(
   // measurement that the wheel-base lever amplifies into yaw. correctWheelAnchor() nudges the
   // anchor and folds the extra lateral variance into pose_cov.
   std::array<double, 36> pose_cov = measurement.pose_covariance;
-  const geometry_msgs::msg::Point anchor_point =
-    correctWheelAnchor(prediction, measurement.shape.dimensions.y, strategy.anchor_point, pose_cov);
+
+  // Lower-bound the anchor's body-lateral variance so a partial cluster edge cannot lever the
+  // wheel-anchor update into yaw. The floor combines:
+  //  1. Heading lever: a face-center half_length ahead/behind the center is laterally uncertain by
+  //     ~half_length * sigma_yaw (sigma_yaw = configured heading measurement uncertainty).
+  //  2. Stationary gate: a stopped vehicle's heading is not corroborated by motion, so a partial
+  //     edge carries no yaw information; scale the floor up as speed drops to zero, driving the
+  //     update to longitudinal-only and freezing yaw when stopped.
+  // correctWheelAnchor() then takes the max of this floor and the width-mismatch variance.
+  const double half_length = motion_model_.getLength() * 0.5;
+  const double yaw_var = object_model_.measurement_covariance.yaw;
+  const double heading_lever_var = half_length * half_length * yaw_var;
+
+  constexpr double stationary_speed = 1.39;              // [m/s] ~5 km/h, below which yaw is frozen
+  constexpr double stationary_lateral_inflation = 10.0;  // [-] floor multiplier at zero speed
+  const double speed = std::abs(motion_model_.getStateElement(BicycleMotionModel::IDX::U));
+  const double stationary_ratio = 1.0 - std::clamp(speed / stationary_speed, 0.0, 1.0);
+  const double lateral_var_floor =
+    heading_lever_var * (1.0 + stationary_ratio * (stationary_lateral_inflation - 1.0));
+
+  const geometry_msgs::msg::Point anchor_point = correctWheelAnchor(
+    prediction, measurement.shape.dimensions.y, strategy.anchor_point, lateral_var_floor, pose_cov);
 
   const bool measure_front = strategy.type == UpdateStrategyType::FRONT_WHEEL_UPDATE;
   shape_update_anchor_ = measure_front ? BicycleMotionModel::LengthUpdateAnchor::FRONT
