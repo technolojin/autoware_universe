@@ -67,12 +67,15 @@ void TrackerProcessor::updateEgoPose(
   ego_pose_ = ego_pose_stamped;
 }
 
-void TrackerProcessor::predictTrackers(const rclcpp::Time & time)
+void TrackerProcessor::predictTrackers(
+  const rclcpp::Time & time, const Eigen::Matrix2d & odom_vel_cov_map)
 {
   std::unique_ptr<ScopedTimeTrack> st_ptr;
   if (time_keeper_) st_ptr = std::make_unique<ScopedTimeTrack>(__func__, *time_keeper_);
 
   for (auto itr = list_tracker_.begin(); itr != list_tracker_.end(); ++itr) {
+    // Feed the ego-odometry velocity covariance so prediction accounts for ego localization drift.
+    (*itr)->setOdometryVelocityCovariance(odom_vel_cov_map);
     (*itr)->predict(time);
   }
 }

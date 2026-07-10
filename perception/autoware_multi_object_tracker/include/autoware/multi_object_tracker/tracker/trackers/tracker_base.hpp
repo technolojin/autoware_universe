@@ -281,6 +281,11 @@ public:
     getShapeModel().setEgoPose(ego_pos);
   }
 
+  // Supply the ego-odometry velocity covariance (map frame) used as position process noise in the
+  // next prediction. Leaf trackers forward it to their motion model(s); composite trackers forward
+  // to every inner tracker. Base default is a no-op.
+  virtual void setOdometryVelocityCovariance(const Eigen::Matrix2d & cov_map) { (void)cov_map; }
+
   virtual void setOrientationAvailability(
     const types::OrientationAvailability & orientation_availability)
   {

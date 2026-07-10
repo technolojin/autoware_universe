@@ -38,6 +38,11 @@ public:
   }
 
   bool predict(const rclcpp::Time & time) override;
+  void setOdometryVelocityCovariance(const Eigen::Matrix2d & cov_map) override
+  {
+    pedestrian_tracker_.setOdometryVelocityCovariance(cov_map);
+    bicycle_tracker_.setOdometryVelocityCovariance(cov_map);
+  }
   bool measure(
     const types::DynamicObject & object, const rclcpp::Time & time,
     const types::InputChannel & channel_info) override;

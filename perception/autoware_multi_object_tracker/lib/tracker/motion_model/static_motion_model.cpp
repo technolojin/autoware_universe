@@ -130,6 +130,9 @@ bool StaticMotionModel::predictStateStep(const double dt, KalmanFilter & ekf) co
   Q(IDX::Y, IDX::Y) = motion_params_.q_cov_y * dt * dt;
   Q(IDX::Y, IDX::X) = 0.0;
 
+  // Ego localization drift adds map-frame position process noise (no-op if unset).
+  addOdometryProcessNoise(Q, dt, {{IDX::X, IDX::Y}});
+
   // predict state
   return ekf.predict(X_next_t, A, Q);
 }

@@ -591,6 +591,10 @@ bool BicycleMotionModel::predictStateStep(const double dt, KalmanFilter & ekf) c
   Q(IDX::U, IDX::U) = q_cov_vel_long;
   Q(IDX::V, IDX::V) = q_cov_vel_lat;
 
+  // Ego localization drift adds map-frame position process noise. Applied common-mode across both
+  // axle points so it is a pure rigid translation of the body (no spurious length/yaw noise).
+  addOdometryProcessNoise(Q, dt, {{IDX::X1, IDX::Y1}, {IDX::X2, IDX::Y2}});
+
   // control-input model B and control-input u are not used
   // Eigen::MatrixXd B = Eigen::MatrixXd::Zero(DIM, DIM);
   // Eigen::MatrixXd u = Eigen::MatrixXd::Zero(DIM, 1);

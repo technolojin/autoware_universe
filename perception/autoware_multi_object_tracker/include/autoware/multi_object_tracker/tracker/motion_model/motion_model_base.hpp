@@ -24,6 +24,9 @@
 #include <geometry_msgs/msg/twist.hpp>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 
+#include <initializer_list>
+#include <utility>
+
 namespace autoware::multi_object_tracker
 {
 template <int StateSize, int MeasurementSize = 2>
@@ -49,12 +52,47 @@ protected:
     return q;
   }()};
 
+  // Ego-odometry velocity covariance in the map frame [m^2/s^2]. Between measurement updates the
+  // ego localization drifts at a rate bounded by the ego velocity uncertainty, so each tracked
+  // position accumulates map-frame process noise. Set per prediction cycle; zero by default, which
+  // makes addOdometryProcessNoise() a no-op (backward compatible).
+  Eigen::Matrix2d odom_vel_cov_map_{Eigen::Matrix2d::Zero()};
+
+  // Add the ego-odometry-driven position process noise (odom_vel_cov_map_ * dt^2) to Q. For
+  // multi-point states (e.g. the bicycle's two axle points) the same noise is applied common-mode
+  // across every point pair, i.e. a pure rigid translation that adds no spurious relative
+  // (length/yaw) uncertainty. `pos_indices` lists the (x, y) state indices of each position point.
+  void addOdometryProcessNoise(
+    StateMat & Q, const double dt,
+    std::initializer_list<std::pair<int, int>> pos_indices) const
+  {
+    if (odom_vel_cov_map_.isZero()) return;
+    const Eigen::Matrix2d cov = odom_vel_cov_map_ * dt * dt;
+    for (const auto & [ax, ay] : pos_indices) {
+      for (const auto & [bx, by] : pos_indices) {
+        Q(ax, bx) += cov(0, 0);
+        Q(ax, by) += cov(0, 1);
+        Q(ay, bx) += cov(1, 0);
+        Q(ay, by) += cov(1, 1);
+      }
+    }
+  }
+
 public:
   void setZ(double z) noexcept { z_ = z; }
   void updateZ(double z, double gain) noexcept { z_ = (1.0 - gain) * z_ + gain * z; }
   void setOrientation(const geometry_msgs::msg::Quaternion & q) noexcept { orientation_ = q; }
   double getZ() const noexcept { return z_; }
   const geometry_msgs::msg::Quaternion & getOrientation() const noexcept { return orientation_; }
+  // Ego-odometry velocity covariance (map frame) used as position process noise during prediction.
+  void setOdometryVelocityCovariance(const Eigen::Matrix2d & cov_map) noexcept
+  {
+    odom_vel_cov_map_ = cov_map;
+  }
+  const Eigen::Matrix2d & getOdometryVelocityCovariance() const noexcept
+  {
+    return odom_vel_cov_map_;
+  }
   // Add these type aliases for convenience
   using KalmanFilter = KalmanFilterTemplate<StateSize, MeasurementSize>;
   using StateVec = typename KalmanFilter::StateVec;

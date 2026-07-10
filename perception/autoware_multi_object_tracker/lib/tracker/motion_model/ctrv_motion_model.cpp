@@ -301,6 +301,9 @@ bool CTRVMotionModel::predictStateStep(const double dt, KalmanFilter & ekf) cons
   Q(IDX::VEL, IDX::VEL) = q_cov_vel;
   Q(IDX::WZ, IDX::WZ) = q_cov_wz;
 
+  // Ego localization drift adds map-frame position process noise (no-op if unset).
+  addOdometryProcessNoise(Q, dt, {{IDX::X, IDX::Y}});
+
   // control-input model B and control-input u are not used
   // Eigen::MatrixXd B = Eigen::MatrixXd::Zero(DIM, DIM);
   // Eigen::MatrixXd u = Eigen::MatrixXd::Zero(DIM, 1);

@@ -50,7 +50,9 @@ public:
 
   // Tracker processes
   void updateEgoPose(const std::optional<geometry_msgs::msg::PoseStamped> & ego_pose_stamped);
-  void predictTrackers(const rclcpp::Time & time);
+  void predictTrackers(
+    const rclcpp::Time & time,
+    const Eigen::Matrix2d & odom_vel_cov_map = Eigen::Matrix2d::Zero());
   types::AssociationResult associate(const types::DynamicObjectList & detected_objects) const;
   void update(const types::AssociatedObjects & associated_objects);
   void spawn(const types::AssociatedObjects & associated_objects);
