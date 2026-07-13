@@ -50,9 +50,13 @@ double correctWheelAnchorLateral(
   double & var_lat);
 
 // Laterally corrects the anchor against `prediction` and folds the extra variance into `pose_cov`.
+// `far_axle_lateral_var` is the current lateral position variance of the unobserved (far) axle
+// point; it floors the extra variance so a one-sided cluster cannot drive the lateral/yaw estimate
+// to be more certain than the tracker already is (prevents wheel-base-lever runaway yaw).
 geometry_msgs::msg::Point correctWheelAnchor(
   const types::DynamicObject & prediction, const double polygon_width,
-  const geometry_msgs::msg::Point & anchor, std::array<double, 36> & pose_cov);
+  const geometry_msgs::msg::Point & anchor, std::array<double, 36> & pose_cov,
+  const double far_axle_lateral_var);
 
 }  // namespace autoware::multi_object_tracker
 

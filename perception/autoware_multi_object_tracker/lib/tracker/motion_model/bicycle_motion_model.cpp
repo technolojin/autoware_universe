@@ -130,6 +130,23 @@ double BicycleMotionModel::getLength() const
   return wheel_base / (motion_params_.lf_ratio + motion_params_.lr_ratio);
 }
 
+double BicycleMotionModel::getAxleLateralVariance(const bool front_point) const
+{
+  StateMat P_t;
+  ekf_.getP(P_t);
+
+  const double yaw = getYawState();
+  const double sin_yaw = std::sin(yaw);
+  const double cos_yaw = std::cos(yaw);
+
+  const int ix = front_point ? IDX::X2 : IDX::X1;
+  const int iy = front_point ? IDX::Y2 : IDX::Y1;
+
+  // Project the axle-point 2x2 position block onto the body lateral axis n = (-sin yaw, cos yaw).
+  return sin_yaw * sin_yaw * P_t(ix, ix) - 2.0 * sin_yaw * cos_yaw * P_t(ix, iy) +
+         cos_yaw * cos_yaw * P_t(iy, iy);
+}
+
 bool BicycleMotionModel::updateStatePose(
   const double & x, const double & y, const std::array<double, 36> & pose_cov,
   const double & length)
