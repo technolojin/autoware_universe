@@ -43,7 +43,7 @@ public:
   PedestrianTracker(const rclcpp::Time & time, const types::DynamicObject & object);
 
   bool predict(const rclcpp::Time & time) override;
-  bool measure(
+  float measure(
     const types::DynamicObject & object, const rclcpp::Time & time,
     const types::InputChannel & channel_info) override;
   bool getTrackedObject(

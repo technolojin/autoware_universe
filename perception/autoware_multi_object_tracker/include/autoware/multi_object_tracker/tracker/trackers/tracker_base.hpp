@@ -72,6 +72,13 @@ private:
   mutable types::DynamicObject cached_object_;
   mutable int cached_measurement_count_;
 
+  // Existence-probability update, factored out of updateWithMeasurement(). The measured channel and
+  // the total probability are boosted by a partial Bayesian step scaled by `update_score` (a weak
+  // kinematic update commits only a partial boost); the other channels decay over `delta_time`.
+  void updateExistenceProbability(
+    const types::DynamicObject & object, const types::InputChannel & channel_info,
+    const float delta_time, const float update_score);
+
 public:
   Tracker(const rclcpp::Time & time, const types::DynamicObject & object);
   virtual ~Tracker() = default;
@@ -239,12 +246,25 @@ protected:
     cached_measurement_count_ = -1;
   }
 
+  // Kinematic update score returned by measure()/conditionedUpdate(), in [0, 1]. It grades how
+  // strongly the measurement constrained the motion model and modulates the existence-probability
+  // boost applied in updateWithMeasurement(): a full-strength update commits the full Bayesian
+  // step, a weak update only a partial ("mid") step.
+  static constexpr float kUpdateScoreFull = 1.0f;  // standard Kalman / wheel-anchored / bbox update
+  static constexpr float kUpdateScoreMid = 0.2f;   // PARTIAL_UPDATE wheel-anchored update
+  static constexpr float kUpdateScoreLow = 0.05f;  // WEAK_UPDATE pseudo-measurement
+  static constexpr float kUpdateScoreNone = 0.0f;  // update did not apply (EKF rejected)
+  // Floor applied to the boost weight so any associated measurement still raises existence, even
+  // when the kinematic update was rejected.
+  static constexpr float kExistenceBoostFloor = kUpdateScoreLow;
+
   // virtual functions
-  virtual bool measure(
+  // Return a kinematic update score in [0, 1] (see kUpdateScore* above).
+  virtual float measure(
     const types::DynamicObject & object, const rclcpp::Time & time,
     const types::InputChannel & channel_info) = 0;
 
-  virtual bool conditionedUpdate(
+  virtual float conditionedUpdate(
     const types::DynamicObject & measurement, const types::DynamicObject & prediction,
     const rclcpp::Time & measurement_time, const types::InputChannel & channel_info);
 

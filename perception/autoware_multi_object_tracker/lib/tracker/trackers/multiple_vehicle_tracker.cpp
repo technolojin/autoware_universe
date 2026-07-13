@@ -16,6 +16,8 @@
 
 #include "autoware/multi_object_tracker/object_model/object_model.hpp"
 
+#include <algorithm>
+
 namespace autoware::multi_object_tracker
 {
 MultipleVehicleTracker::MultipleVehicleTracker(
@@ -34,29 +36,32 @@ bool MultipleVehicleTracker::predict(const rclcpp::Time & time)
   return true;
 }
 
-bool MultipleVehicleTracker::measure(
+float MultipleVehicleTracker::measure(
   const types::DynamicObject & object, const rclcpp::Time & time,
   const types::InputChannel & channel_info)
 {
-  big_vehicle_tracker_.measure(object, time, channel_info);
-  normal_vehicle_tracker_.measure(object, time, channel_info);
+  // Both inner trackers see the same measurement; the stronger update reflects the match quality.
+  const float score_big = big_vehicle_tracker_.measure(object, time, channel_info);
+  const float score_normal = normal_vehicle_tracker_.measure(object, time, channel_info);
   big_vehicle_tracker_.setLatestMeasurementTime(time);
   normal_vehicle_tracker_.setLatestMeasurementTime(time);
 
-  return true;
+  return std::max(score_big, score_normal);
 }
 
-bool MultipleVehicleTracker::conditionedUpdate(
+float MultipleVehicleTracker::conditionedUpdate(
   const types::DynamicObject & measurement, const types::DynamicObject & prediction,
   const rclcpp::Time & measurement_time, const types::InputChannel & channel_info)
 {
-  big_vehicle_tracker_.conditionedUpdate(measurement, prediction, measurement_time, channel_info);
-  normal_vehicle_tracker_.conditionedUpdate(
+  // Both inner trackers see the same measurement; the stronger update reflects the match quality.
+  const float score_big =
+    big_vehicle_tracker_.conditionedUpdate(measurement, prediction, measurement_time, channel_info);
+  const float score_normal = normal_vehicle_tracker_.conditionedUpdate(
     measurement, prediction, measurement_time, channel_info);
   big_vehicle_tracker_.setLatestMeasurementTime(measurement_time);
   normal_vehicle_tracker_.setLatestMeasurementTime(measurement_time);
 
-  return true;
+  return std::max(score_big, score_normal);
 }
 
 void MultipleVehicleTracker::setObjectShape(const autoware_perception_msgs::msg::Shape & shape)

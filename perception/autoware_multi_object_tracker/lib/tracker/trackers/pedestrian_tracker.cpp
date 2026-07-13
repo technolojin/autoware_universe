@@ -115,7 +115,7 @@ bool PedestrianTracker::updateKinematics(const types::DynamicObject & object)
   return is_updated;
 }
 
-bool PedestrianTracker::measure(
+float PedestrianTracker::measure(
   const types::DynamicObject & object, const rclcpp::Time & time,
   const types::InputChannel & channel_info)
 {
@@ -128,12 +128,12 @@ bool PedestrianTracker::measure(
       dt);
   }
 
-  updateKinematics(object);
+  const bool is_updated = updateKinematics(object);
 
   shape_model_.update(object, channel_info.trust_extension, motion_model_.getYawState());
 
   removeCache();
-  return true;
+  return is_updated ? kUpdateScoreFull : kUpdateScoreNone;
 }
 
 bool PedestrianTracker::getMotionState(

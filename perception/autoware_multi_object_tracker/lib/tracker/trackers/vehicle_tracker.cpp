@@ -248,7 +248,7 @@ bool VehicleTracker::updateWheelKinematics(
   return is_updated;
 }
 
-bool VehicleTracker::measure(
+float VehicleTracker::measure(
   const types::DynamicObject & in_object, const rclcpp::Time & time,
   const types::InputChannel & channel_info)
 {
@@ -264,7 +264,7 @@ bool VehicleTracker::measure(
   const types::DynamicObject corrected = normalizeYaw(in_object, motion_model_.getYawState());
 
   const bool is_bbox = (corrected.shape.type == autoware_perception_msgs::msg::Shape::BOUNDING_BOX);
-  updateKinematics(corrected, channel_info);
+  const bool is_updated = updateKinematics(corrected, channel_info);
   if (channel_info.trust_extension && is_bbox) {
     shape_model_.updateShape(corrected);
   }
@@ -280,7 +280,7 @@ bool VehicleTracker::measure(
 
   shape_update_anchor_ = BicycleMotionModel::LengthUpdateAnchor::CENTER;
   removeCache();
-  return true;
+  return is_updated ? kUpdateScoreFull : kUpdateScoreNone;
 }
 
 bool VehicleTracker::getMotionState(
@@ -321,7 +321,7 @@ bool VehicleTracker::getTrackedObject(
   return true;
 }
 
-bool VehicleTracker::conditionedUpdate(
+float VehicleTracker::conditionedUpdate(
   const types::DynamicObject & measurement, const types::DynamicObject & prediction,
   const rclcpp::Time & measurement_time, const types::InputChannel & channel_info)
 {
@@ -352,7 +352,7 @@ bool VehicleTracker::conditionedUpdate(
 
     shape_update_anchor_ = BicycleMotionModel::LengthUpdateAnchor::CENTER;
     removeCache();
-    return true;
+    return kUpdateScoreLow;
   }
 
   // Use the aligned measurement so the polygon width/anchor are expressed in the tracker frame
@@ -369,7 +369,7 @@ bool VehicleTracker::conditionedUpdate(
 
   shape_update_anchor_ = BicycleMotionModel::LengthUpdateAnchor::CENTER;
   removeCache();
-  return is_updated;
+  return is_updated ? kUpdateScoreMid : kUpdateScoreNone;
 }
 
 void VehicleTracker::assembleShapeTo(types::DynamicObject & output, bool /*to_publish*/) const

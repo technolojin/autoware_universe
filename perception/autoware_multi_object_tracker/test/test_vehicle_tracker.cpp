@@ -14,6 +14,7 @@
 
 #include "autoware/multi_object_tracker/object_model/object_model.hpp"
 #include "autoware/multi_object_tracker/tracker/motion_model/bicycle_motion_model.hpp"
+#include "autoware/multi_object_tracker/tracker/trackers/vehicle_tracker.hpp"
 #include "autoware/multi_object_tracker/tracker/update/vehicle_update_strategy.hpp"
 
 #include <Eigen/Eigenvalues>
@@ -312,6 +313,121 @@ TEST(ProcessNoiseAxleStructure, PositiveSemiDefinite)
     ASSERT_EQ(solver.info(), Eigen::Success) << "yaw=" << yaw;
     EXPECT_GE(solver.eigenvalues().minCoeff(), -1e-9) << "yaw=" << yaw;
   }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Tracker::updateWithMeasurement — existence probability scaled by the kinematic update score.
+// ---------------------------------------------------------------------------------------------
+namespace
+{
+// A VehicleTracker whose kinematic update is stubbed to return a fixed score, so the existence-
+// probability modulation in updateWithMeasurement() can be exercised in isolation of the EKF
+// geometry.
+class ScoredVehicleTracker : public VehicleTracker
+{
+public:
+  ScoredVehicleTracker(
+    const rclcpp::Time & time, const types::DynamicObject & object, const float score)
+  : VehicleTracker(object_model::normal_vehicle, time, object), score_(score)
+  {
+  }
+
+  // Expose the protected base score constants to the test body.
+  static constexpr float kFull = kUpdateScoreFull;
+  static constexpr float kMid = kUpdateScoreMid;
+  static constexpr float kLow = kUpdateScoreLow;
+  static constexpr float kNone = kUpdateScoreNone;
+  static constexpr float kFloor = kExistenceBoostFloor;
+
+  float measure(
+    const types::DynamicObject &, const rclcpp::Time &, const types::InputChannel &) override
+  {
+    return score_;
+  }
+
+private:
+  float score_;
+};
+
+types::DynamicObject makeCarBbox(const rclcpp::Time & time)
+{
+  types::DynamicObject obj;
+  obj.time = time;
+  obj.classification = {{classes::Label::CAR, 1.0F}};
+  obj.pose.position.x = 0.0;
+  obj.pose.position.y = 0.0;
+  obj.pose.position.z = 0.0;
+  obj.pose.orientation.w = 1.0;
+  obj.pose_covariance.fill(0.0);
+  obj.twist_covariance.fill(0.0);
+  obj.shape.type = autoware_perception_msgs::msg::Shape::BOUNDING_BOX;
+  obj.shape.dimensions.x = 4.5;
+  obj.shape.dimensions.y = 1.8;
+  obj.shape.dimensions.z = 1.5;
+  obj.kinematics.orientation_availability = types::OrientationAvailability::AVAILABLE;
+  obj.kinematics.has_position_covariance = false;
+  obj.kinematics.has_twist = false;
+  obj.kinematics.has_twist_covariance = false;
+  obj.existence_probability = 0.9F;
+  obj.channel_index = 0;
+  return obj;
+}
+
+constexpr float kExistencePrior = 0.6F;
+
+// Runs a single NORMAL-path update (trust_extension = true) whose stubbed kinematic score is
+// `score`, starting from kExistencePrior, and returns the resulting total existence probability.
+float existenceAfterUpdate(const float score)
+{
+  const rclcpp::Time t0(1000000000LL, RCL_ROS_TIME);
+  const rclcpp::Time t1 = t0 + rclcpp::Duration::from_seconds(0.1);
+  const auto obj = makeCarBbox(t0);
+
+  types::InputChannel channel;
+  channel.index = 0;
+  channel.trust_extension = true;        // -> NORMAL path -> measure()
+  channel.trust_classification = false;  // leave classification untouched
+  channel.trust_orientation = true;
+
+  ScoredVehicleTracker tracker(t0, obj, score);
+  tracker.initializeExistenceProbabilities(channel.index, kExistencePrior);
+
+  auto meas = obj;
+  meas.time = t1;
+  tracker.predict(t1);
+  tracker.updateWithMeasurement(meas, t1, channel);
+  return tracker.getTotalExistenceProbability();
+}
+}  // namespace
+
+// The existence boost scales with the kinematic update score: full > mid > low, each above the
+// prior. The full update uses weight 1.0, so its result IS the fully-boosted value and every lower
+// tier lands at prior + score * (fully_boosted - prior).
+TEST(ExistenceProbabilityScore, BoostScalesWithUpdateScore)
+{
+  const float p_full = existenceAfterUpdate(ScoredVehicleTracker::kFull);
+  const float p_mid = existenceAfterUpdate(ScoredVehicleTracker::kMid);
+  const float p_low = existenceAfterUpdate(ScoredVehicleTracker::kLow);
+
+  EXPECT_GT(p_full, p_mid);
+  EXPECT_GT(p_mid, p_low);
+  EXPECT_GT(p_low, kExistencePrior);
+
+  const float boost = p_full - kExistencePrior;
+  EXPECT_NEAR(p_mid, kExistencePrior + ScoredVehicleTracker::kMid * boost, 1e-6F);
+  EXPECT_NEAR(p_low, kExistencePrior + ScoredVehicleTracker::kLow * boost, 1e-6F);
+}
+
+// A rejected kinematic update (score None) is floored so an associated measurement still raises
+// existence: its boost equals the floor weight (kExistenceBoostFloor), not zero.
+TEST(ExistenceProbabilityScore, RejectedUpdateIsFlooredNotZero)
+{
+  const float p_full = existenceAfterUpdate(ScoredVehicleTracker::kFull);
+  const float p_none = existenceAfterUpdate(ScoredVehicleTracker::kNone);
+
+  EXPECT_GT(p_none, kExistencePrior);  // still boosts, not just decays
+  const float boost = p_full - kExistencePrior;
+  EXPECT_NEAR(p_none, kExistencePrior + ScoredVehicleTracker::kFloor * boost, 1e-6F);
 }
 
 }  // namespace autoware::multi_object_tracker

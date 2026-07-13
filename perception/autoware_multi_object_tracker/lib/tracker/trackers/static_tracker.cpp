@@ -69,7 +69,7 @@ bool StaticTracker::updateKinematics(const types::DynamicObject & object)
   return motion_model_.updateStatePose(x, y, object.pose_covariance);
 }
 
-bool StaticTracker::measure(
+float StaticTracker::measure(
   const types::DynamicObject & object, const rclcpp::Time & /*time*/,
   const types::InputChannel & /*channel_info*/)
 {
@@ -78,10 +78,10 @@ bool StaticTracker::measure(
   motion_model_.setOrientation(object.pose.orientation);
   motion_model_.setZ(object.pose.position.z);
 
-  updateKinematics(object);
+  const bool is_updated = updateKinematics(object);
 
   removeCache();
-  return true;
+  return is_updated ? kUpdateScoreFull : kUpdateScoreNone;
 }
 
 bool StaticTracker::getMotionState(

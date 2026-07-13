@@ -174,7 +174,7 @@ bool PolygonTracker::updateKinematics(const types::DynamicObject & object)
   return is_updated;
 }
 
-bool PolygonTracker::measure(
+float PolygonTracker::measure(
   const types::DynamicObject & object, const rclcpp::Time & time,
   const types::InputChannel & /*channel_info*/)
 {
@@ -198,10 +198,10 @@ bool PolygonTracker::measure(
     }
   }
 
-  updateKinematics(object);
+  const bool is_updated = updateKinematics(object);
 
   removeCache();
-  return true;
+  return is_updated ? kUpdateScoreFull : kUpdateScoreNone;
 }
 
 bool PolygonTracker::getMotionState(

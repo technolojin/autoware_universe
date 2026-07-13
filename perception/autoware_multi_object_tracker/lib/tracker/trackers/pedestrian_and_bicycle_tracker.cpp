@@ -14,6 +14,8 @@
 
 #include "autoware/multi_object_tracker/tracker/trackers/pedestrian_and_bicycle_tracker.hpp"
 
+#include <algorithm>
+
 namespace autoware::multi_object_tracker
 {
 PedestrianAndBicycleTracker::PedestrianAndBicycleTracker(
@@ -32,16 +34,17 @@ bool PedestrianAndBicycleTracker::predict(const rclcpp::Time & time)
   return true;
 }
 
-bool PedestrianAndBicycleTracker::measure(
+float PedestrianAndBicycleTracker::measure(
   const types::DynamicObject & object, const rclcpp::Time & time,
   const types::InputChannel & channel_info)
 {
-  pedestrian_tracker_.measure(object, time, channel_info);
-  bicycle_tracker_.measure(object, time, channel_info);
+  // Both inner trackers see the same measurement; the stronger update reflects the match quality.
+  const float score_pedestrian = pedestrian_tracker_.measure(object, time, channel_info);
+  const float score_bicycle = bicycle_tracker_.measure(object, time, channel_info);
   pedestrian_tracker_.setLatestMeasurementTime(time);
   bicycle_tracker_.setLatestMeasurementTime(time);
 
-  return true;
+  return std::max(score_pedestrian, score_bicycle);
 }
 
 bool PedestrianAndBicycleTracker::getTrackedObject(

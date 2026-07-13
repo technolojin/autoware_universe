@@ -137,48 +137,14 @@ bool Tracker::updateWithMeasurement(
   const types::DynamicObject & object, const rclcpp::Time & measurement_time,
   const types::InputChannel & channel_info, bool has_significant_shape_change)
 {
-  // Update existence probability
-  {
-    no_measurement_count_ = 0;
-    ++total_measurement_count_;
+  // Interval since the previous measurement, captured before last_update_with_measurement_time_ is
+  // overwritten below; used to decay the non-measured channels' existence probabilities.
+  const float delta_time =
+    std::abs((measurement_time - last_update_with_measurement_time_).seconds());
 
-    // existence probability on each channel
-    const float delta_time =
-      std::abs((measurement_time - last_update_with_measurement_time_).seconds());
-    constexpr float probability_true_detection = 0.9;
-    constexpr float probability_false_detection = 0.2;
-
-    // update measured channel probability without decay
-    const uint & channel_index = channel_info.index;
-    bool found = false;
-    for (auto & prob : existence_probabilities_) {
-      if (prob.channel_index == channel_index) {
-        prob.existence_probability = updateProbability(
-          prob.existence_probability, probability_true_detection, probability_false_detection);
-        found = true;
-        break;
-      }
-    }
-    if (!found) {
-      // If the channel is not found, add it with initial probability 0.001
-      float new_prob =
-        updateProbability(0.001f, probability_true_detection, probability_false_detection);
-      existence_probabilities_.push_back({channel_index, new_prob});
-    }
-
-    // decay other channel probabilities
-    for (auto & prob : existence_probabilities_) {
-      if (prob.channel_index != channel_index) {
-        prob.existence_probability = decayProbability(prob.existence_probability, delta_time);
-      }
-    }
-
-    // update total existence probability
-    total_existence_probability_ = updateProbability(
-      total_existence_probability_, object.existence_probability * probability_true_detection,
-      probability_false_detection);
-  }
-
+  no_measurement_count_ = 0;
+  ++total_measurement_count_;
+  // Set early: shape updates inside the kinematic path read getLatestMeasurementTime().
   last_update_with_measurement_time_ = measurement_time;
 
   // Update classification
@@ -201,13 +167,16 @@ bool Tracker::updateWithMeasurement(
   }
   setOrientationAvailability(kinematics_.orientation_availability);
 
+  // Kinematic update first. The returned score grades how strongly the measurement constrained the
+  // motion model and then modulates the existence-probability boost below.
   // Select update path: NORMAL / TRY_EXTENSION / CONDITIONED
   const UpdatePath path =
     selectUpdatePath(channel_info.trust_extension, has_significant_shape_change);
 
+  float update_score = kUpdateScoreNone;
   if (path == UpdatePath::NORMAL) {
     unstable_shape_filter_.processNormalMeasurement(object);
-    measure(object, measurement_time, channel_info);
+    update_score = measure(object, measurement_time, channel_info);
     trust_extension_ = object.trust_extension;
 
   } else if (path == UpdatePath::TRY_EXTENSION) {
@@ -218,7 +187,7 @@ bool Tracker::updateWithMeasurement(
       setObjectShape(smoothed_shape);
       auto smoothed_object = object;
       smoothed_object.shape = smoothed_shape;
-      measure(smoothed_object, measurement_time, channel_info);
+      update_score = measure(smoothed_object, measurement_time, channel_info);
       trust_extension_ = smoothed_object.trust_extension;
       unstable_shape_filter_.clear();
     } else {
@@ -226,16 +195,67 @@ bool Tracker::updateWithMeasurement(
       // The current (assembled) shape serves as the conditioned-update reference shape.
       types::DynamicObject predicted_object;
       getTrackedObject(measurement_time, predicted_object);
-      conditionedUpdate(object, predicted_object, measurement_time, channel_info);
+      update_score = conditionedUpdate(object, predicted_object, measurement_time, channel_info);
     }
 
   } else {  // UpdatePath::CONDITIONED
     types::DynamicObject predicted_object;
     getTrackedObject(measurement_time, predicted_object);
-    conditionedUpdate(object, predicted_object, measurement_time, channel_info);
+    update_score = conditionedUpdate(object, predicted_object, measurement_time, channel_info);
   }
 
+  // Existence probability, boosted in proportion to the kinematic update score.
+  updateExistenceProbability(object, channel_info, delta_time, update_score);
+
   return true;
+}
+
+void Tracker::updateExistenceProbability(
+  const types::DynamicObject & object, const types::InputChannel & channel_info,
+  const float delta_time, const float update_score)
+{
+  constexpr float probability_true_detection = 0.9;
+  constexpr float probability_false_detection = 0.2;
+
+  // A weak kinematic update commits only a partial boost; a full update commits the whole Bayesian
+  // step. The floor keeps at least a partial boost so any associated measurement still raises
+  // existence, even when the kinematic update was rejected (update_score == kUpdateScoreNone).
+  // boost_weight == 1.0 reproduces the full Bayesian update exactly.
+  const float boost_weight = std::clamp(update_score, kExistenceBoostFloor, kUpdateScoreFull);
+
+  // update measured channel probability without decay, scaled by the boost weight
+  const uint & channel_index = channel_info.index;
+  bool found = false;
+  for (auto & prob : existence_probabilities_) {
+    if (prob.channel_index == channel_index) {
+      const float boosted = updateProbability(
+        prob.existence_probability, probability_true_detection, probability_false_detection);
+      prob.existence_probability += boost_weight * (boosted - prob.existence_probability);
+      found = true;
+      break;
+    }
+  }
+  if (!found) {
+    // If the channel is not found, add it starting from initial probability 0.001
+    constexpr float new_channel_prior = 0.001f;
+    const float boosted =
+      updateProbability(new_channel_prior, probability_true_detection, probability_false_detection);
+    existence_probabilities_.push_back(
+      {channel_index, new_channel_prior + boost_weight * (boosted - new_channel_prior)});
+  }
+
+  // decay other channel probabilities
+  for (auto & prob : existence_probabilities_) {
+    if (prob.channel_index != channel_index) {
+      prob.existence_probability = decayProbability(prob.existence_probability, delta_time);
+    }
+  }
+
+  // update total existence probability, scaled by the boost weight
+  const float boosted_total = updateProbability(
+    total_existence_probability_, object.existence_probability * probability_true_detection,
+    probability_false_detection);
+  total_existence_probability_ += boost_weight * (boosted_total - total_existence_probability_);
 }
 
 bool Tracker::updateWithoutMeasurement(const rclcpp::Time & timestamp)
@@ -595,7 +615,7 @@ double Tracker::getPositionCovarianceDeterminant() const
   return determinant;
 }
 
-bool Tracker::conditionedUpdate(
+float Tracker::conditionedUpdate(
   const types::DynamicObject & measurement, const types::DynamicObject & prediction,
   const rclcpp::Time & measurement_time, const types::InputChannel & channel_info)
 {
@@ -606,7 +626,7 @@ bool Tracker::conditionedUpdate(
   RCLCPP_ERROR(
     rclcpp::get_logger("Tracker"),
     "Tracker::conditionedUpdate: Base class method is NOT expected to be called.");
-  return false;
+  return kUpdateScoreNone;
 }
 
 }  // namespace autoware::multi_object_tracker
