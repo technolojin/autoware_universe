@@ -88,11 +88,6 @@ public:
   double getYawState() const;
   double getLength() const;
 
-  // Perpendicular-to-heading (lateral) position variance of one axle point in the current state,
-  // i.e. nᵀ P_block n with n = (-sin yaw, cos yaw). front_point selects (X2,Y2); otherwise (X1,Y1).
-  // Used to size the observability floor on a one-sided wheel-anchor update.
-  double getAxleLateralVariance(bool front_point) const;
-
   bool updateStatePose(
     const double & x, const double & y, const std::array<double, 36> & pose_cov,
     const double & length);

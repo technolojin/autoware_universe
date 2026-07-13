@@ -238,8 +238,7 @@ double correctWheelAnchorLateral(
 
 geometry_msgs::msg::Point correctWheelAnchor(
   const types::DynamicObject & prediction, const double polygon_width,
-  const geometry_msgs::msg::Point & anchor, std::array<double, 36> & pose_cov,
-  const double far_axle_lateral_var)
+  const geometry_msgs::msg::Point & anchor, std::array<double, 36> & pose_cov)
 {
   using autoware_utils_geometry::xyzrpy_covariance_index::XYZRPY_COV_IDX;
 
@@ -259,17 +258,6 @@ geometry_msgs::msg::Point correctWheelAnchor(
   double var_lat = 0.0;
   const double lateral_move =
     correctWheelAnchorLateral(lateral_offset, tracker_half, polygon_half, var_lat);
-
-  // Observability floor. A one-sided cluster (polygon much narrower than the tracked box) sees only
-  // the near face and carries no information about the far side, so it must not let the lateral
-  // measurement become more certain than the far axle point already is. Without this, the fixed
-  // dead-zone var_lat stays smaller than the ever-growing far-axle prior, the lateral Kalman gain
-  // saturates, and the wheel-base lever converts the biased edge into yaw (runaway rotation). The
-  // floor fades to zero as the far side comes into view (polygon_half -> tracker_half), where the
-  // measurement genuinely constrains width and yaw again.
-  const double one_sidedness =
-    std::clamp(1.0 - polygon_half / std::max(tracker_half, 1e-3), 0.0, 1.0);
-  var_lat = std::max(var_lat, one_sidedness * far_axle_lateral_var);
 
   // Apply the scalar lateral move back along n to get the corrected anchor point.
   geometry_msgs::msg::Point corrected = anchor;
