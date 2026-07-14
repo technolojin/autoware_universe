@@ -161,12 +161,11 @@ std::vector<float> EgoHistory::create_ego_agent_past(
     ego_agent_past[t * features_per_timestep + EGO_AGENT_PAST_IDX_COS] = 1.0f;
   }
 
-  // If no odometry messages are available, return the default-initialized ego_agent_past
   if (buffer.empty()) {
     return ego_agent_past;
   }
 
-  // Lambda to transform a pose to ego frame and store into the flat array
+  // Transform a pose to the ego frame and store it into the flat array.
   auto store_pose = [&](size_t timestep_idx, const geometry_msgs::msg::Pose & pose) {
     const Eigen::Matrix4d pose_map_4x4 = utils::pose_to_matrix4d(pose);
     const Eigen::Matrix4d pose_ego_4x4 = map_to_ego_transform * pose_map_4x4;

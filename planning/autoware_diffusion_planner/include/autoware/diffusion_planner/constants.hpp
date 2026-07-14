@@ -29,8 +29,7 @@ constexpr double PREDICTION_TIME_STEP_S = 0.1;
 constexpr double TIMER_PERIOD_S = 0.2;
 constexpr int LOG_THROTTLE_INTERVAL_MS = 5000;
 
-// Odometry-object time synchronization (odometry is buffered and sampled at the object stamp).
-// Warn threshold for the gap between the nearest buffered odometry and the object stamp.
+// Odometry-object time synchronization threshold
 constexpr double MAX_EGO_OBJECT_TIME_DIFF_S = 0.1;
 
 // Geometric constants

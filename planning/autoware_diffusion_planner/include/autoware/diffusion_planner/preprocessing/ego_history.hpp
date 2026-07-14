@@ -36,9 +36,10 @@ namespace autoware::diffusion_planner::preprocess
 class EgoHistory
 {
 public:
-  // Buffer spans the ego-history horizon (INPUT_T steps) + ego-object gap + 0.5 s headroom.
+  // Ego-history horizon + ego-object time gap + 0.5 s headroom.
   static constexpr double DEFAULT_BUFFER_WINDOW_S =
-    INPUT_T * constants::PREDICTION_TIME_STEP_S + constants::MAX_EGO_OBJECT_TIME_DIFF_S + 0.5;
+    (EGO_HISTORY_SHAPE[1] - 1) * constants::PREDICTION_TIME_STEP_S +
+    constants::MAX_EGO_OBJECT_TIME_DIFF_S + 0.5;
 
   explicit EgoHistory(double buffer_window_s = DEFAULT_BUFFER_WINDOW_S);
 
