@@ -14,6 +14,7 @@
 
 #include "autoware/diffusion_planner/preprocessing/ego_history.hpp"
 
+#include "autoware/diffusion_planner/constants.hpp"
 #include "autoware/diffusion_planner/dimensions.hpp"
 #include "autoware/diffusion_planner/utils/utils.hpp"
 
@@ -59,10 +60,8 @@ EgoHistory::EgoHistory(const double buffer_window_s) : buffer_window_s_(buffer_w
 void EgoHistory::update(
   const std::vector<std::shared_ptr<const nav_msgs::msg::Odometry>> & ego_states)
 {
-  // Append raw odometry, keeping the buffer monotonic oldest-to-newest. Dropping buffered samples
-  // not older than an incoming stamp keeps back() the true newest even across a bag loop, sim
-  // reset, or out-of-order stamp, so the window prune below and the interpolation in
-  // select_state()/to_agent_past() stay valid.
+  // Append raw odometry; drop buffered samples not older than an incoming stamp so the buffer
+  // stays monotonic oldest-to-newest (also handles bag loop / sim reset / out-of-order stamps).
   for (const auto & ego_state : ego_states) {
     if (!ego_state) {
       continue;
@@ -74,7 +73,7 @@ void EgoHistory::update(
     buffer_.push_back(*ego_state);
   }
 
-  // Prune to the time window (the buffer is now monotonic, so back() is the newest sample).
+  // Prune to the time window from the newest sample.
   if (!buffer_.empty()) {
     const rclcpp::Time newest_stamp(buffer_.back().header.stamp);
     while (buffer_.size() > 1 &&
@@ -149,7 +148,7 @@ std::pair<nav_msgs::msg::Odometry, double> EgoHistory::select_ego_state(
 
 std::vector<float> EgoHistory::create_ego_agent_past(
   const std::deque<nav_msgs::msg::Odometry> & buffer, size_t num_timesteps,
-  const Eigen::Matrix4d & map_to_ego_transform, const std::optional<rclcpp::Time> & reference_time,
+  const Eigen::Matrix4d & map_to_ego_transform, const rclcpp::Time & reference_time,
   bool use_time_interpolation)
 {
   const size_t features_per_timestep = 4;  // x, y, cos, sin
@@ -180,21 +179,12 @@ std::vector<float> EgoHistory::create_ego_agent_past(
     ego_agent_past[base_idx + EGO_AGENT_PAST_IDX_SIN] = sin_yaw;
   };
 
-  if (!reference_time.has_value()) {
-    // Legacy behavior: use the last num_timesteps odom messages directly
-    const size_t start_idx = (buffer.size() >= num_timesteps) ? buffer.size() - num_timesteps : 0;
-    for (size_t i = start_idx; i < buffer.size(); ++i) {
-      store_pose(i - start_idx, buffer[i].pose.pose);
-    }
-    return ego_agent_past;
-  }
-
-  // Time-based interpolation behavior
+  // Resample the buffer at fixed dt intervals ending at reference_time.
   auto stamp_to_sec = [](const builtin_interfaces::msg::Time & stamp) -> double {
     return static_cast<double>(stamp.sec) + static_cast<double>(stamp.nanosec) * 1e-9;
   };
 
-  const double ref_sec = reference_time->seconds();
+  const double ref_sec = reference_time.seconds();
   constexpr double dt = constants::PREDICTION_TIME_STEP_S;  // 0.1s
 
   const double first_sec = stamp_to_sec(buffer.front().header.stamp);

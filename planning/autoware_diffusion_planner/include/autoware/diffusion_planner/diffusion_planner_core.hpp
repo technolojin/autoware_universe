@@ -186,7 +186,7 @@ public:
    * @brief Prepare frame context for inference.
    *
    * @param ego_states Ego odometry received since the last cycle; buffered and sampled at the
-   *                   object timestamp (see select_ego_state)
+   *                   object timestamp (see EgoHistory::select_state)
    * @param ego_acceleration Current ego vehicle acceleration
    * @param objects Tracked objects in the scene (timing anchor for the frame)
    * @param traffic_signals Traffic signal information

@@ -16,6 +16,7 @@
 #define AUTOWARE__DIFFUSION_PLANNER__PREPROCESSING__EGO_HISTORY_HPP_
 
 #include "autoware/diffusion_planner/constants.hpp"
+#include "autoware/diffusion_planner/dimensions.hpp"
 
 #include <Eigen/Core>
 #include <rclcpp/time.hpp>
@@ -24,34 +25,24 @@
 
 #include <deque>
 #include <memory>
-#include <optional>
 #include <utility>
 #include <vector>
 
 namespace autoware::diffusion_planner::preprocess
 {
 
-/**
- * @brief Owns the ego odometry buffer and guarantees it stays monotonic oldest-to-newest.
- *
- * The buffer stores raw (unshifted) odometry. update() enforces the ordering invariant that every
- * consumer relies on: the window prune treats back() as newest, and both select_state() and
- * to_agent_past() assume monotonic timestamps. A backwards stamp (bag loop, sim reset, or an
- * out-of-order message) would otherwise stall pruning and corrupt interpolation, so update() drops
- * any buffered samples not older than an incoming stamp before appending it.
- */
+/// @brief Owns the ego odometry buffer, kept monotonic oldest-to-newest and pruned to a time
+/// window.
 class EgoHistory
 {
 public:
-  explicit EgoHistory(double buffer_window_s = constants::ODOMETRY_BUFFER_WINDOW_S);
+  // Buffer spans the ego-history horizon (INPUT_T steps) + ego-object gap + 0.5 s headroom.
+  static constexpr double DEFAULT_BUFFER_WINDOW_S =
+    INPUT_T * constants::PREDICTION_TIME_STEP_S + constants::MAX_EGO_OBJECT_TIME_DIFF_S + 0.5;
 
-  /**
-   * @brief Append newly received raw odometry, keep the buffer monotonic, prune to the time window.
-   *
-   * Null entries are skipped. A single out-of-order stamp trims only the offending tail samples
-   * (older history is kept); a large backwards jump empties the stale timeline since every buffered
-   * sample is newer than the reset.
-   */
+  explicit EgoHistory(double buffer_window_s = DEFAULT_BUFFER_WINDOW_S);
+
+  /// @brief Ingest raw odometry, keep the buffer monotonic, and prune to the time window.
   void update(const std::vector<std::shared_ptr<const nav_msgs::msg::Odometry>> & ego_states);
 
   bool empty() const { return buffer_.empty(); }
@@ -59,37 +50,20 @@ public:
   /// @brief Stamp of the newest buffered sample. Precondition: !empty().
   rclcpp::Time newest_stamp() const;
 
-  /**
-   * @brief Select the ego state at frame_time. Precondition: !empty().
-   *
-   * With use_time_interpolation the pose and twist are linearly interpolated between the two
-   * buffered samples bracketing frame_time; otherwise, or when frame_time is outside the buffered
-   * range, the nearest sample is returned.
-   *
-   * @return The selected ego state and its absolute time offset from frame_time [s] (0 when
-   *         interpolated within the buffer range).
-   */
+  /// @brief Ego state at frame_time (interpolated when enabled and in range, else nearest sample).
+  ///        Returns the state and its absolute time offset from frame_time [s]. Precondition:
+  ///        !empty().
   std::pair<nav_msgs::msg::Odometry, double> select_state(
     const rclcpp::Time & frame_time, bool use_time_interpolation) const;
 
-  /**
-   * @brief Build the past ego trajectory expressed in the current ego frame.
-   *
-   * Resamples the buffer at fixed PREDICTION_TIME_STEP_S intervals backwards from reference_time
-   * (t=0 is the oldest step, t=num_timesteps-1 is reference_time). When shift_x is set, the same
-   * base_link-to-center shift as the reference transform is applied so the trajectory is consistent
-   * with map_to_ego_transform.
-   *
-   * @return Flat [x, y, cos_yaw, sin_yaw] per timestep, length EGO_HISTORY_SHAPE[1] * 4.
-   */
+  /// @brief Past ego trajectory in the current ego frame, resampled at PREDICTION_TIME_STEP_S back
+  ///        from reference_time. Flat [x, y, cos_yaw, sin_yaw] per step, length
+  ///        EGO_HISTORY_SHAPE[1] * 4.
   std::vector<float> to_agent_past(
     const Eigen::Matrix4d & map_to_ego_transform, const rclcpp::Time & reference_time,
     bool use_time_interpolation, bool shift_x, double base_link_to_center) const;
 
-  // --- Static primitives (relocated from utils::select_ego_state /
-  // preprocess::create_ego_agent_past).
-  //     They operate on an explicit oldest-to-newest buffer and are exposed for focused unit tests;
-  //     the instance methods above apply them to the owned buffer.
+  // Static primitives over an explicit oldest-to-newest buffer.
 
   static std::pair<nav_msgs::msg::Odometry, double> select_ego_state(
     const std::deque<nav_msgs::msg::Odometry> & buffer, const rclcpp::Time & frame_time,
@@ -97,9 +71,8 @@ public:
 
   static std::vector<float> create_ego_agent_past(
     const std::deque<nav_msgs::msg::Odometry> & buffer, size_t num_timesteps,
-    const Eigen::Matrix4d & map_to_ego_transform,
-    const std::optional<rclcpp::Time> & reference_time = std::nullopt,
-    bool use_time_interpolation = true);
+    const Eigen::Matrix4d & map_to_ego_transform, const rclcpp::Time & reference_time,
+    bool use_time_interpolation);
 
 private:
   std::deque<nav_msgs::msg::Odometry> buffer_;

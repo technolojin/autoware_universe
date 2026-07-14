@@ -29,11 +29,8 @@ constexpr double PREDICTION_TIME_STEP_S = 0.1;
 constexpr double TIMER_PERIOD_S = 0.2;
 constexpr int LOG_THROTTLE_INTERVAL_MS = 5000;
 
-// Odometry-object synchronization: tracked objects are the timing anchor, odometry (lower latency)
-// is buffered, and the sample nearest the object timestamp is used. The buffer window must exceed
-// the ego-history duration ((INPUT_T + 1) * PREDICTION_TIME_STEP_S) plus the odometry-object gap.
-constexpr double ODOMETRY_BUFFER_WINDOW_S = 3.0;
-// Warn (but proceed) when the nearest buffered odometry is farther than this from the object stamp.
+// Odometry-object time synchronization (odometry is buffered and sampled at the object stamp).
+// Warn threshold for the gap between the nearest buffered odometry and the object stamp.
 constexpr double MAX_EGO_OBJECT_TIME_DIFF_S = 0.1;
 
 // Geometric constants

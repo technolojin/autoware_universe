@@ -160,7 +160,7 @@ TEST_F(EgoHistoryTest, SelectStateFallsBackToNearestOutsideRange)
 
 // --- Past-trajectory export --------------------------------------------------------------------
 
-// Migrated from preprocessing_utils_edge_case_test: resampling with exact time alignment.
+// Resampling with exact time alignment.
 TEST_F(EgoHistoryTest, CreateEgoAgentPastTimeInterpolation)
 {
   std::deque<Odometry> odom_msgs;
@@ -177,8 +177,8 @@ TEST_F(EgoHistoryTest, CreateEgoAgentPastTimeInterpolation)
   const rclcpp::Time ref_time(0, 200000000u);  // 0.2s
   const size_t num_timesteps = 3;
 
-  const auto result =
-    EgoHistory::create_ego_agent_past(odom_msgs, num_timesteps, identity, ref_time);
+  const auto result = EgoHistory::create_ego_agent_past(
+    odom_msgs, num_timesteps, identity, ref_time, /*use_time_interpolation=*/true);
 
   ASSERT_EQ(result.size(), num_timesteps * 4);
   for (size_t t = 0; t < num_timesteps; ++t) {
