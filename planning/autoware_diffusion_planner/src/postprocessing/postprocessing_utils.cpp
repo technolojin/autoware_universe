@@ -33,6 +33,7 @@
 #include <limits>
 #include <stdexcept>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace autoware::diffusion_planner::postprocess
@@ -296,13 +297,19 @@ PredictedObjects create_predicted_objects(
 }
 
 PredictedObjects create_history_debug_objects(
-  const std::vector<AgentHistory> & ego_centric_histories, const rclcpp::Time & stamp)
+  const std::vector<AgentHistory> & ego_centric_histories,
+  const autoware_perception_msgs::msg::TrackedObjects & tracked_objects, const rclcpp::Time & stamp)
 {
   PredictedObjects predicted_objects;
   predicted_objects.header.stamp = stamp;
   predicted_objects.header.frame_id = "map";
 
   constexpr double time_step{0.1};
+
+  std::unordered_map<std::string, const TrackedObject *> tracker_by_id;
+  for (const auto & tracked : tracked_objects.objects) {
+    tracker_by_id.emplace(autoware_utils_uuid::to_hex_string(tracked.object_id), &tracked);
+  }
 
   for (const auto & history : ego_centric_histories) {
     if (history.empty()) {
@@ -312,6 +319,10 @@ PredictedObjects create_history_debug_objects(
     // original_info holds each slot's map-frame snapshot; apply_transform rewrites only the
     // ego-centric pose matrix.
     const TrackedObject & latest_info = history.get_latest_state().original_info;
+    // Raw tracker observation for this agent; the grid snapshots carry resampled kinematics.
+    const auto tracker_it = tracker_by_id.find(history.get_latest_state().object_id);
+    const TrackedObject & origin_info =
+      tracker_it != tracker_by_id.end() ? *tracker_it->second : latest_info;
 
     PredictedObject object;
     {  // History grid as the path, oldest slot first
@@ -324,18 +335,18 @@ PredictedObjects create_history_debug_objects(
       predicted_path.confidence = 1.0;
       object.kinematics.predicted_paths.push_back(predicted_path);
     }
-    {  // Initial state pinned to the newest slot, extrapolated to the frame time
-      object.kinematics.initial_pose_with_covariance = latest_info.kinematics.pose_with_covariance;
+    {  // Initial state pinned to the raw tracker observation
+      object.kinematics.initial_pose_with_covariance = origin_info.kinematics.pose_with_covariance;
       object.kinematics.initial_twist_with_covariance =
-        latest_info.kinematics.twist_with_covariance;
+        origin_info.kinematics.twist_with_covariance;
       object.kinematics.initial_acceleration_with_covariance =
-        latest_info.kinematics.acceleration_with_covariance;
+        origin_info.kinematics.acceleration_with_covariance;
     }
-    {  // Identity from the newest slot
-      object.object_id = latest_info.object_id;
-      object.classification = latest_info.classification;
-      object.shape = latest_info.shape;
-      object.existence_probability = latest_info.existence_probability;
+    {  // Identity from the raw tracker observation
+      object.object_id = origin_info.object_id;
+      object.classification = origin_info.classification;
+      object.shape = origin_info.shape;
+      object.existence_probability = origin_info.existence_probability;
     }
     predicted_objects.objects.push_back(object);
   }

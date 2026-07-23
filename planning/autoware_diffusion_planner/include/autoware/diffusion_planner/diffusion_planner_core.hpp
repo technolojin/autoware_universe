@@ -106,6 +106,8 @@ struct FrameContext
   geometry_msgs::msg::AccelWithCovarianceStamped ego_acceleration;
   Eigen::Matrix4d ego_to_map_transform;
   std::vector<AgentHistory> ego_centric_neighbor_histories;
+  // Latest tracker message; the debug export anchors each object at its raw observation.
+  TrackedObjects tracked_objects;
   rclcpp::Time frame_time;
 };
 

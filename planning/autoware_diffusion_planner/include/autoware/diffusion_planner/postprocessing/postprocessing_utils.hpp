@@ -78,15 +78,18 @@ PredictedObjects create_predicted_objects(
 /**
  * @brief Debug export of the encoder input: each neighbor history grid (oldest first,
  *        interpolated and extrapolated slots included) as a predicted path on the 0.1s grid,
- *        with the initial state pinned to the newest slot at the frame time. Map-frame poses are
- *        read from each state's original_info snapshot.
+ *        with the initial state pinned to the raw tracker observation matched by UUID.
+ *        Map-frame path poses are read from each state's original_info snapshot.
  *
  * @param ego_centric_histories The agent histories fed to the encoder.
+ * @param tracked_objects The latest tracker message supplying the raw initial states.
  * @param stamp The ROS time stamp for the message.
  * @return A PredictedObjects message tracing each neighbor's history.
  */
 PredictedObjects create_history_debug_objects(
-  const std::vector<AgentHistory> & ego_centric_histories, const rclcpp::Time & stamp);
+  const std::vector<AgentHistory> & ego_centric_histories,
+  const autoware_perception_msgs::msg::TrackedObjects & tracked_objects,
+  const rclcpp::Time & stamp);
 
 /**
  * @brief Creates a Trajectory message from parsed agent poses for a specific batch and ego agent.

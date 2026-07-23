@@ -317,7 +317,7 @@ std::optional<FrameContext> DiffusionPlannerCore::create_frame_context(
   // Create frame context
   const FrameContext frame_context{
     *ego_kinematic_state, *ego_acceleration, ego_to_map_transform, processed_neighbor_histories,
-    frame_time};
+    *effective_objects, frame_time};
 
   return frame_context;
 }
@@ -595,7 +595,7 @@ PlannerOutput DiffusionPlannerCore::create_planner_output(
   // PredictedObjects
   // Debug export: encoder-input neighbor histories in place of the decoded prediction.
   output.predicted_objects = postprocess::create_history_debug_objects(
-    frame_context.ego_centric_neighbor_histories, timestamp);
+    frame_context.ego_centric_neighbor_histories, frame_context.tracked_objects, timestamp);
 
   output.guidance_triggered = inference_output.guidance_triggered;
 
