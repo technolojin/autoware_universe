@@ -295,6 +295,54 @@ PredictedObjects create_predicted_objects(
   return predicted_objects;
 }
 
+PredictedObjects create_history_debug_objects(
+  const std::vector<AgentHistory> & ego_centric_histories, const rclcpp::Time & stamp)
+{
+  PredictedObjects predicted_objects;
+  predicted_objects.header.stamp = stamp;
+  predicted_objects.header.frame_id = "map";
+
+  constexpr double time_step{0.1};
+
+  for (const auto & history : ego_centric_histories) {
+    if (history.empty()) {
+      continue;
+    }
+    const auto & states = history.states();
+    // original_info holds each slot's map-frame snapshot; apply_transform rewrites only the
+    // ego-centric pose matrix.
+    const TrackedObject & oldest_info = states.front().original_info;
+    const TrackedObject & latest_info = history.get_latest_state().original_info;
+
+    PredictedObject object;
+    {  // History grid as the path, oldest slot first
+      PredictedPath predicted_path;
+      predicted_path.path.reserve(states.size());
+      for (const auto & state : states) {
+        predicted_path.path.push_back(state.original_info.kinematics.pose_with_covariance.pose);
+      }
+      predicted_path.time_step = rclcpp::Duration::from_seconds(time_step);
+      predicted_path.confidence = 1.0;
+      object.kinematics.predicted_paths.push_back(predicted_path);
+    }
+    {  // Initial state pinned to the oldest slot
+      object.kinematics.initial_pose_with_covariance = oldest_info.kinematics.pose_with_covariance;
+      object.kinematics.initial_twist_with_covariance =
+        oldest_info.kinematics.twist_with_covariance;
+      object.kinematics.initial_acceleration_with_covariance =
+        oldest_info.kinematics.acceleration_with_covariance;
+    }
+    {  // Identity from the newest slot
+      object.object_id = latest_info.object_id;
+      object.classification = latest_info.classification;
+      object.shape = latest_info.shape;
+      object.existence_probability = latest_info.existence_probability;
+    }
+    predicted_objects.objects.push_back(object);
+  }
+  return predicted_objects;
+}
+
 Trajectory create_ego_trajectory(
   const std::vector<std::vector<std::vector<Eigen::Matrix4d>>> & agent_poses,
   const rclcpp::Time & stamp, const geometry_msgs::msg::Point & base_position,

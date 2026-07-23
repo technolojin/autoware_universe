@@ -76,6 +76,19 @@ PredictedObjects create_predicted_objects(
   const int64_t batch_index);
 
 /**
+ * @brief Debug export of the encoder input: each neighbor history grid (oldest first,
+ *        interpolated and extrapolated slots included) as a predicted path on the 0.1s grid,
+ *        with the initial state pinned to the oldest slot. Map-frame poses are read from each
+ *        state's original_info snapshot.
+ *
+ * @param ego_centric_histories The agent histories fed to the encoder.
+ * @param stamp The ROS time stamp for the message.
+ * @return A PredictedObjects message tracing each neighbor's history.
+ */
+PredictedObjects create_history_debug_objects(
+  const std::vector<AgentHistory> & ego_centric_histories, const rclcpp::Time & stamp);
+
+/**
  * @brief Creates a Trajectory message from parsed agent poses for a specific batch and ego agent.
  *
  * @param agent_poses The parsed agent poses [batch][agent][timestep] -> pose matrix.

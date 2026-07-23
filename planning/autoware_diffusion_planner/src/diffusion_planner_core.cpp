@@ -593,10 +593,9 @@ PlannerOutput DiffusionPlannerCore::create_planner_output(
   }
 
   // PredictedObjects
-  // Use the first prediction as the main predicted objects
-  constexpr int64_t batch_idx = 0;
-  output.predicted_objects = postprocess::create_predicted_objects(
-    agent_poses, frame_context.ego_centric_neighbor_histories, timestamp, batch_idx);
+  // Debug export: encoder-input neighbor histories in place of the decoded prediction.
+  output.predicted_objects = postprocess::create_history_debug_objects(
+    frame_context.ego_centric_neighbor_histories, timestamp);
 
   output.guidance_triggered = inference_output.guidance_triggered;
 
