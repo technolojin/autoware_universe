@@ -311,7 +311,6 @@ PredictedObjects create_history_debug_objects(
     const auto & states = history.states();
     // original_info holds each slot's map-frame snapshot; apply_transform rewrites only the
     // ego-centric pose matrix.
-    const TrackedObject & oldest_info = states.front().original_info;
     const TrackedObject & latest_info = history.get_latest_state().original_info;
 
     PredictedObject object;
@@ -325,12 +324,12 @@ PredictedObjects create_history_debug_objects(
       predicted_path.confidence = 1.0;
       object.kinematics.predicted_paths.push_back(predicted_path);
     }
-    {  // Initial state pinned to the oldest slot
-      object.kinematics.initial_pose_with_covariance = oldest_info.kinematics.pose_with_covariance;
+    {  // Initial state pinned to the newest slot, extrapolated to the frame time
+      object.kinematics.initial_pose_with_covariance = latest_info.kinematics.pose_with_covariance;
       object.kinematics.initial_twist_with_covariance =
-        oldest_info.kinematics.twist_with_covariance;
+        latest_info.kinematics.twist_with_covariance;
       object.kinematics.initial_acceleration_with_covariance =
-        oldest_info.kinematics.acceleration_with_covariance;
+        latest_info.kinematics.acceleration_with_covariance;
     }
     {  // Identity from the newest slot
       object.object_id = latest_info.object_id;

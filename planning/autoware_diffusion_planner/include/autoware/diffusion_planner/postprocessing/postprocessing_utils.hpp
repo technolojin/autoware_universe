@@ -78,8 +78,8 @@ PredictedObjects create_predicted_objects(
 /**
  * @brief Debug export of the encoder input: each neighbor history grid (oldest first,
  *        interpolated and extrapolated slots included) as a predicted path on the 0.1s grid,
- *        with the initial state pinned to the oldest slot. Map-frame poses are read from each
- *        state's original_info snapshot.
+ *        with the initial state pinned to the newest slot at the frame time. Map-frame poses are
+ *        read from each state's original_info snapshot.
  *
  * @param ego_centric_histories The agent histories fed to the encoder.
  * @param stamp The ROS time stamp for the message.
