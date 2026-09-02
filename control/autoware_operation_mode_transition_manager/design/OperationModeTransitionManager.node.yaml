@@ -45,14 +45,12 @@ subscribers:
 publishers:
   - name: operation_mode
     message_type: autoware_adapi_v1_msgs/msg/OperationModeState
-  # shared with external operators; multiple publishers
+  # legacy interfaces: node-side names are fixed
   - name: engage
     message_type: autoware_vehicle_msgs/msg/Engage
-    global: /autoware/engage
     remap_target: /autoware/engage
   - name: gate_mode_cmd
     message_type: tier4_control_msgs/msg/GateMode
-    global: /control/gate_mode_cmd
     remap_target: /control/gate_mode_cmd
 
 clients:
